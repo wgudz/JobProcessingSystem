@@ -82,8 +82,6 @@ int main()
 
     REQUIRE(completedJob.status() == JobStatus::Completed);
     REQUIRE(completedJob.result().value() == "15");
-    return 0;
-
 
     Job invalidSleepJob(
     6,
@@ -108,4 +106,6 @@ int main()
 
     REQUIRE(invalidPrimesJob.status() == JobStatus::Failed);
     REQUIRE(invalidPrimesJob.error().has_value());
+
+    return 0;
 }
