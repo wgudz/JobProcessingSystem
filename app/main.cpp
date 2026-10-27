@@ -4,6 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 
 std::string statusToString(JobStatus status)
 {
@@ -31,6 +32,36 @@ std::string statusToString(JobStatus status)
     return "UNKNOWN";
 }
 
+template <typename T>
+bool readValue(const std::string& prompt, T& value)
+{
+    while (true)
+    {
+        std::cout << prompt;
+
+        std::string line;
+
+        if (!std::getline(std::cin, line))
+        {
+            return false;
+        }
+
+        std::istringstream input(line);
+
+        if (input >> value)
+        {
+            input >> std::ws;
+
+            if (input.eof())
+            {
+                return true;
+            }
+        }
+
+        std::cout << "Invalid input. Try again.\n";
+    }
+}
+
 int main()
 {
     JobManager manager(4);
@@ -50,7 +81,11 @@ int main()
         std::cout << "Choice: ";
 
         int choice = 0;
-        std::cin >> choice;
+        if (!readValue("Choice: ", choice))
+        {
+            std::cout << "\nInput closed. Shutting down...\n";
+            break;
+        }
 
         switch (choice)
         {
@@ -63,7 +98,11 @@ int main()
                 std::cout << "Choice: ";
 
                 int typeChoice = 0;
-                std::cin >> typeChoice;
+                if (!readValue("Choice: ", typeChoice))
+                {
+                    running = false;
+                    break;
+                }
 
                 JobType type;
 
@@ -92,7 +131,11 @@ int main()
                 std::cout << "Choice: ";
 
                 int priorityChoice = 0;
-                std::cin >> priorityChoice;
+                if (!readValue("Choice: ", priorityChoice))
+                {
+                    running = false;
+                    break;
+                }
 
                 JobPriority priority;
 
@@ -117,7 +160,11 @@ int main()
                 std::cout << "Input value: ";
 
                 std::int64_t input = 0;
-                std::cin >> input;
+                if (!readValue("Input value: ", input))
+                {
+                    running = false;
+                    break;
+                }
 
                 try
                 {
@@ -144,7 +191,11 @@ int main()
                 std::cout << "Job ID: ";
 
                 Job::Id id = 0;
-                std::cin >> id;
+                if (!readValue("Job ID: ", id))
+                {
+                    running = false;
+                    break;
+                }
 
                 try
                 {
@@ -167,7 +218,11 @@ int main()
                 std::cout << "Job ID: ";
 
                 Job::Id id = 0;
-                std::cin >> id;
+                if (!readValue("Job ID: ", id))
+                {
+                    running = false;
+                    break;
+                }
 
                 try
                 {
@@ -205,7 +260,11 @@ int main()
                 std::cout << "Job ID: ";
 
                 Job::Id id = 0;
-                std::cin >> id;
+                if (!readValue("Job ID: ", id))
+                {
+                    running = false;
+                    break;
+                }
 
                 if (manager.cancel(id))
                 {
