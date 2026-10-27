@@ -52,6 +52,15 @@ bool Job::setStatus(JobStatus newStatus)
 {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    if (
+        newStatus == JobStatus::Completed &&
+        cancelRequested_
+    )
+    {
+        status_ = JobStatus::Cancelled;
+        return false;
+    }
+    
     bool allowed = false;
 
     switch (status_)

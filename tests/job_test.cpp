@@ -137,5 +137,25 @@ int main()
         REQUIRE(job.status() == JobStatus::TimedOut);
         REQUIRE(!job.result().has_value());
     }
+
+    {
+        Job job(
+            103,
+            JobType::CalculateSum,
+            JobPriority::Normal,
+            10
+        );
+
+        REQUIRE(job.setStatus(JobStatus::Running));
+
+        REQUIRE(
+            job.requestCancel() ==
+            CancelResult::CancellationRequested
+        );
+
+        REQUIRE(!job.setStatus(JobStatus::Completed));
+
+        REQUIRE(job.status() == JobStatus::Cancelled);
+    }
     return 0;
 }
