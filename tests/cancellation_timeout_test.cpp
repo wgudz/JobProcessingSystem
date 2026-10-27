@@ -1,6 +1,6 @@
 #include "job_system/job_manager.h"
 
-#include <cassert>
+#include "test_utils.h"
 #include <chrono>
 #include <thread>
 
@@ -16,8 +16,8 @@ int main()
             500
         );
 
-        assert(manager.cancel(id));
-        assert(manager.status(id) == JobStatus::Cancelled);
+        REQUIRE(manager.cancel(id));
+        REQUIRE(manager.status(id) == JobStatus::Cancelled);
     }
 
     //anulowanie podczas wykonywania
@@ -47,12 +47,12 @@ int main()
             );
         }
 
-        assert(runningObserved);
-        assert(manager.cancel(id));
+        REQUIRE(runningObserved);
+        REQUIRE(manager.cancel(id));
 
         manager.stop();
 
-        assert(manager.status(id) == JobStatus::Cancelled);
+        REQUIRE(manager.status(id) == JobStatus::Cancelled);
     }
 
     //timeout
@@ -70,8 +70,8 @@ int main()
 
         manager.stop();
 
-        assert(manager.status(id) == JobStatus::TimedOut);
-        assert(!manager.result(id).has_value());
+        REQUIRE(manager.status(id) == JobStatus::TimedOut);
+        REQUIRE(!manager.result(id).has_value());
     }
 
     return 0;

@@ -1,19 +1,19 @@
 #include "job_system/statistics.h"
 
-#include <cassert>
+#include "test_utils.h"
 #include <chrono>
 
 int main()
 {
     Statistics statistics;
 
-    assert(statistics.completed() == 0);
-    assert(statistics.failed() == 0);
-    assert(statistics.cancelled() == 0);
-    assert(statistics.timedOut() == 0);
+    REQUIRE(statistics.completed() == 0);
+    REQUIRE(statistics.failed() == 0);
+    REQUIRE(statistics.cancelled() == 0);
+    REQUIRE(statistics.timedOut() == 0);
 
-    assert(statistics.averageWaitTimeMs() == 0.0);
-    assert(statistics.averageExecutionTimeMs() == 0.0);
+    REQUIRE(statistics.averageWaitTimeMs() == 0.0);
+    REQUIRE(statistics.averageExecutionTimeMs() == 0.0);
 
     statistics.recordCompleted(
         std::chrono::milliseconds(10),
@@ -35,13 +35,13 @@ int main()
         std::chrono::milliseconds(400)
     );
 
-    assert(statistics.completed() == 1);
-    assert(statistics.failed() == 1);
-    assert(statistics.cancelled() == 1);
-    assert(statistics.timedOut() == 1);
+    REQUIRE(statistics.completed() == 1);
+    REQUIRE(statistics.failed() == 1);
+    REQUIRE(statistics.cancelled() == 1);
+    REQUIRE(statistics.timedOut() == 1);
 
-    assert(statistics.averageWaitTimeMs() == 25.0);
-    assert(statistics.averageExecutionTimeMs() == 250.0);
+    REQUIRE(statistics.averageWaitTimeMs() == 25.0);
+    REQUIRE(statistics.averageExecutionTimeMs() == 250.0);
 
     return 0;
 }

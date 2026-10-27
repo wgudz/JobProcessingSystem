@@ -1,5 +1,6 @@
 #include "job_system/job.h"
-#include <cassert>
+
+#include "test_utils.h"
 #include <stdexcept>
 
 int main()
@@ -11,23 +12,23 @@ int main()
         100
     );
 
-    assert(job.id() == 1);
-    assert(job.type() == JobType::CalculateSum);
-    assert(job.status() == JobStatus::Queued);
-    assert(job.priority() == JobPriority::High);
+    REQUIRE(job.id() == 1);
+    REQUIRE(job.type() == JobType::CalculateSum);
+    REQUIRE(job.status() == JobStatus::Queued);
+    REQUIRE(job.priority() == JobPriority::High);
 
-    assert(job.setStatus(JobStatus::Running));
-    assert(job.status() == JobStatus::Running);
+    REQUIRE(job.setStatus(JobStatus::Running));
+    REQUIRE(job.status() == JobStatus::Running);
 
     job.setResult("42");
-    assert(job.result().has_value());
-    assert(job.result().value() == "42");
+    REQUIRE(job.result().has_value());
+    REQUIRE(job.result().value() == "42");
 
-    assert(job.setStatus(JobStatus::Completed));
-    assert(job.status() == JobStatus::Completed);
+    REQUIRE(job.setStatus(JobStatus::Completed));
+    REQUIRE(job.status() == JobStatus::Completed);
 
-    assert(!job.setStatus(JobStatus::Running));
-    assert(job.status() == JobStatus::Completed);
+    REQUIRE(!job.setStatus(JobStatus::Running));
+    REQUIRE(job.status() == JobStatus::Completed);
 
 
     Job failedJob(
@@ -37,22 +38,22 @@ int main()
         100
     );
 
-    assert(failedJob.status() == JobStatus::Queued);
+    REQUIRE(failedJob.status() == JobStatus::Queued);
 
-    assert(failedJob.setStatus(JobStatus::Running));
-    assert(failedJob.status() == JobStatus::Running);
+    REQUIRE(failedJob.setStatus(JobStatus::Running));
+    REQUIRE(failedJob.status() == JobStatus::Running);
 
     failedJob.setError("Invalid input");
 
-    assert(failedJob.error().has_value());
-    assert(failedJob.error().value() == "Invalid input");
+    REQUIRE(failedJob.error().has_value());
+    REQUIRE(failedJob.error().value() == "Invalid input");
 
-    assert(failedJob.setStatus(JobStatus::Failed));
-    assert(failedJob.status() == JobStatus::Failed);
+    REQUIRE(failedJob.setStatus(JobStatus::Failed));
+    REQUIRE(failedJob.status() == JobStatus::Failed);
 
-    assert(!failedJob.setStatus(JobStatus::Completed));
-    assert(!failedJob.setStatus(JobStatus::Running));
-    assert(failedJob.status() == JobStatus::Failed);
+    REQUIRE(!failedJob.setStatus(JobStatus::Completed));
+    REQUIRE(!failedJob.setStatus(JobStatus::Running));
+    REQUIRE(failedJob.status() == JobStatus::Failed);
 
 
 
@@ -72,7 +73,7 @@ int main()
         exceptionThrown = true;
     }
 
-    assert(exceptionThrown);
+    REQUIRE(exceptionThrown);
 
     {
         Job job(
@@ -82,15 +83,15 @@ int main()
             10
         );
 
-        assert(job.setStatus(JobStatus::Running));
+        REQUIRE(job.setStatus(JobStatus::Running));
 
-        assert(job.requestCancel());
+        REQUIRE(job.requestCancel());
 
         const bool completed = job.complete("55");
 
-        assert(!completed);
-        assert(job.status() == JobStatus::Cancelled);
-        assert(!job.result().has_value());
+        REQUIRE(!completed);
+        REQUIRE(job.status() == JobStatus::Cancelled);
+        REQUIRE(!job.result().has_value());
     }
 
 
@@ -102,14 +103,14 @@ int main()
             10
         );
 
-        assert(job.setStatus(JobStatus::Running));
+        REQUIRE(job.setStatus(JobStatus::Running));
 
-        assert(job.complete("55"));
+        REQUIRE(job.complete("55"));
 
-        assert(job.status() == JobStatus::Completed);
-        assert(job.result().value() == "55");
+        REQUIRE(job.status() == JobStatus::Completed);
+        REQUIRE(job.result().value() == "55");
 
-        assert(!job.requestCancel());
+        REQUIRE(!job.requestCancel());
     }
 
     {
@@ -122,13 +123,13 @@ int main()
 
         job.setTimeout(std::chrono::milliseconds(0));
 
-        assert(job.setStatus(JobStatus::Running));
+        REQUIRE(job.setStatus(JobStatus::Running));
 
         const bool completed = job.complete("55");
 
-        assert(!completed);
-        assert(job.status() == JobStatus::TimedOut);
-        assert(!job.result().has_value());
+        REQUIRE(!completed);
+        REQUIRE(job.status() == JobStatus::TimedOut);
+        REQUIRE(!job.result().has_value());
     }
     return 0;
 }

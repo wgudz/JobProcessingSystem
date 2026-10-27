@@ -1,6 +1,6 @@
 #include "job_system/logger.h"
 
-#include <cassert>
+#include "test_utils.h"
 #include <sstream>
 #include <string>
 #include <thread>
@@ -46,15 +46,15 @@ int main()
 
     while (std::getline(input, line))
     {
-        assert(line.find("INFO") != std::string::npos);
-        assert(line.find("worker=") != std::string::npos);
-        assert(line.find("job=") != std::string::npos);
-        assert(line.find("test message") != std::string::npos);
+        REQUIRE(line.find("INFO") != std::string::npos);
+        REQUIRE(line.find("worker=") != std::string::npos);
+        REQUIRE(line.find("job=") != std::string::npos);
+        REQUIRE(line.find("test message") != std::string::npos);
 
         ++lineCount;
     }
 
-    assert(lineCount == workerCount * messagesPerWorker);
+    REQUIRE(lineCount == workerCount * messagesPerWorker);
 
     return 0;
 }

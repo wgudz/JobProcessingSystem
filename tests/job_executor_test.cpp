@@ -1,6 +1,6 @@
 #include "job_system/job_executor.h"
 
-#include <cassert>
+#include "test_utils.h"
 #include <chrono>
 #include <thread>
 
@@ -17,10 +17,10 @@ int main()
 
     executor.execute(job);
 
-    assert(job.status() == JobStatus::Completed);
-    assert(job.result().has_value());
-    assert(job.result().value() == "55");
-    assert(!job.error().has_value());
+    REQUIRE(job.status() == JobStatus::Completed);
+    REQUIRE(job.result().has_value());
+    REQUIRE(job.result().value() == "55");
+    REQUIRE(!job.error().has_value());
 
     Job invalidJob(
         2,
@@ -31,8 +31,8 @@ int main()
 
     executor.execute(invalidJob);
 
-    assert(invalidJob.status() == JobStatus::Failed);
-    assert(invalidJob.error().has_value());
+    REQUIRE(invalidJob.status() == JobStatus::Failed);
+    REQUIRE(invalidJob.error().has_value());
 
 
     Job primesJob(
@@ -44,9 +44,9 @@ int main()
 
     executor.execute(primesJob);
 
-    assert(primesJob.status() == JobStatus::Completed);
-    assert(primesJob.result().has_value());
-    assert(primesJob.result().value() == "4");
+    REQUIRE(primesJob.status() == JobStatus::Completed);
+    REQUIRE(primesJob.result().has_value());
+    REQUIRE(primesJob.result().value() == "4");
 
 
     Job sleepJob(
@@ -58,9 +58,9 @@ int main()
 
     executor.execute(sleepJob);
 
-    assert(sleepJob.status() == JobStatus::Completed);
-    assert(sleepJob.result().has_value());
-    assert(sleepJob.result().value() == "Sleep completed");
+    REQUIRE(sleepJob.status() == JobStatus::Completed);
+    REQUIRE(sleepJob.result().has_value());
+    REQUIRE(sleepJob.result().value() == "Sleep completed");
 
 
 
@@ -73,15 +73,15 @@ int main()
 
     executor.execute(completedJob);
 
-    assert(completedJob.status() == JobStatus::Completed);
-    assert(completedJob.result().has_value());
-    assert(completedJob.result().value() == "15");
+    REQUIRE(completedJob.status() == JobStatus::Completed);
+    REQUIRE(completedJob.result().has_value());
+    REQUIRE(completedJob.result().value() == "15");
 
 
     executor.execute(completedJob);
 
-    assert(completedJob.status() == JobStatus::Completed);
-    assert(completedJob.result().value() == "15");
+    REQUIRE(completedJob.status() == JobStatus::Completed);
+    REQUIRE(completedJob.result().value() == "15");
     return 0;
 
 
@@ -94,8 +94,8 @@ int main()
 
     executor.execute(invalidSleepJob);
 
-    assert(invalidSleepJob.status() == JobStatus::Failed);
-    assert(invalidSleepJob.error().has_value());
+    REQUIRE(invalidSleepJob.status() == JobStatus::Failed);
+    REQUIRE(invalidSleepJob.error().has_value());
 
     Job invalidPrimesJob(
     7,
@@ -106,6 +106,6 @@ int main()
 
     executor.execute(invalidPrimesJob);
 
-    assert(invalidPrimesJob.status() == JobStatus::Failed);
-    assert(invalidPrimesJob.error().has_value());
+    REQUIRE(invalidPrimesJob.status() == JobStatus::Failed);
+    REQUIRE(invalidPrimesJob.error().has_value());
 }

@@ -1,7 +1,7 @@
 #include "job_system/thread_safe_queue.h"
 
 #include <algorithm>
-#include <cassert>
+#include "test_utils.h"
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -57,7 +57,7 @@ int main()
                     const int id = firstId + i;
 
                     const bool pushed = queue.push(id);
-                    assert(pushed);
+                    REQUIRE(pushed);
                 }
             }
         );
@@ -75,13 +75,13 @@ int main()
         consumer.join();
     }
 
-    assert(consumed.size() == totalJobs);
+    REQUIRE(consumed.size() == totalJobs);
 
     std::sort(consumed.begin(), consumed.end());
 
     for (int id = 0; id < totalJobs; ++id)
     {
-        assert(consumed[id] == id);
+        REQUIRE(consumed[id] == id);
     }
 
     return 0;

@@ -1,6 +1,6 @@
 #include "job_system/worker_pool.h"
 
-#include <cassert>
+#include "test_utils.h"
 #include <chrono>
 #include <stdexcept>
 #include <memory>
@@ -37,7 +37,7 @@ int main()
             end - start
         );
 
-    assert(duration.count() < 600);
+    REQUIRE(duration.count() < 600);
 
 
     bool exceptionThrown = false;
@@ -51,7 +51,7 @@ int main()
         exceptionThrown = true;
     }
 
-    assert(exceptionThrown);
+    REQUIRE(exceptionThrown);
     
     {
         WorkerPool pool(2);
@@ -106,7 +106,7 @@ int main()
                 end - start
             );
 
-        assert(elapsed.count() < 1000);
+        REQUIRE(elapsed.count() < 1000);
     }
 
     {
@@ -125,7 +125,7 @@ int main()
             exceptionThrown = true;
         }
 
-        assert(exceptionThrown);
+        REQUIRE(exceptionThrown);
 
         pool.stop();
     }
@@ -147,7 +147,7 @@ int main()
             exceptionThrown = true;
         }
 
-        assert(exceptionThrown);
+        REQUIRE(exceptionThrown);
     }
     return 0;
 }

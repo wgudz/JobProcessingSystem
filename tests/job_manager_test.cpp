@@ -1,6 +1,6 @@
 #include "job_system/job_manager.h"
 
-#include <cassert>
+#include "test_utils.h"
 #include <chrono>
 #include <thread>
 #include <stdexcept>
@@ -26,9 +26,9 @@ int main()
         100
     );
 
-    assert(id1 == 1);
-    assert(id2 == 2);
-    assert(id1 != id2);
+    REQUIRE(id1 == 1);
+    REQUIRE(id2 == 2);
+    REQUIRE(id1 != id2);
 
 
     const auto sleepId = manager.submit(
@@ -53,25 +53,25 @@ int main()
         );
     }
 
-    assert(observedRunning);
+    REQUIRE(observedRunning);
 
     manager.stop();
 
-    assert(manager.status(id1) == JobStatus::Completed);
-    assert(manager.status(id2) == JobStatus::Completed);
+    REQUIRE(manager.status(id1) == JobStatus::Completed);
+    REQUIRE(manager.status(id2) == JobStatus::Completed);
 
     const auto result1 = manager.result(id1);
     const auto result2 = manager.result(id2);
 
-    assert(result1.has_value());
-    assert(result1.value() == "55");
+    REQUIRE(result1.has_value());
+    REQUIRE(result1.value() == "55");
 
-    assert(result2.has_value());
+    REQUIRE(result2.has_value());
 
-    assert(result2.value() == "25");
+    REQUIRE(result2.value() == "25");
 
-    assert(!manager.error(id1).has_value());
-    assert(!manager.error(id2).has_value());
+    REQUIRE(!manager.error(id1).has_value());
+    REQUIRE(!manager.error(id2).has_value());
 
     bool resultExceptionThrown = false;
 
@@ -84,10 +84,10 @@ int main()
         resultExceptionThrown = true;
     }
 
-    assert(resultExceptionThrown);
+    REQUIRE(resultExceptionThrown);
 
-    assert(manager.status(id1) == JobStatus::Completed);
-    assert(manager.status(id2) == JobStatus::Completed);
+    REQUIRE(manager.status(id1) == JobStatus::Completed);
+    REQUIRE(manager.status(id2) == JobStatus::Completed);
 
     bool exceptionThrown = false;
 
@@ -100,7 +100,7 @@ int main()
         exceptionThrown = true;
     }
 
-    assert(exceptionThrown);
+    REQUIRE(exceptionThrown);
 
 
     {
@@ -112,10 +112,10 @@ int main()
             100
         );
 
-        assert(manager.cancel(id));
-        assert(manager.status(id) == JobStatus::Cancelled);
+        REQUIRE(manager.cancel(id));
+        REQUIRE(manager.status(id) == JobStatus::Cancelled);
 
-        assert(!manager.cancel(999));
+        REQUIRE(!manager.cancel(999));
     }
 
 
@@ -145,15 +145,15 @@ int main()
             );
         }
 
-        assert(runningObserved);
+        REQUIRE(runningObserved);
 
         const bool cancelled = manager.cancel(id);
 
-        assert(cancelled);
+        REQUIRE(cancelled);
 
         manager.stop();
 
-        assert(manager.status(id) == JobStatus::Cancelled);
+        REQUIRE(manager.status(id) == JobStatus::Cancelled);
     }
 
 
@@ -171,8 +171,8 @@ int main()
 
         manager.stop();
 
-        assert(manager.status(id) == JobStatus::TimedOut);
-        assert(!manager.result(id).has_value());
+        REQUIRE(manager.status(id) == JobStatus::TimedOut);
+        REQUIRE(!manager.result(id).has_value());
     }
 
     {
@@ -196,7 +196,7 @@ int main()
             exceptionThrown = true;
         }
 
-        assert(exceptionThrown);
+        REQUIRE(exceptionThrown);
     }
 
     {
@@ -218,8 +218,8 @@ int main()
 
         manager.stop();
 
-        assert(manager.status(id1) == JobStatus::Completed);
-        assert(manager.status(id2) == JobStatus::Completed);
+        REQUIRE(manager.status(id1) == JobStatus::Completed);
+        REQUIRE(manager.status(id2) == JobStatus::Completed);
     }
 
     {
@@ -261,13 +261,13 @@ int main()
             thread.join();
         }
 
-        assert(ids.size() == totalJobs);
+        REQUIRE(ids.size() == totalJobs);
 
         std::sort(ids.begin(), ids.end());
 
         for (int i = 0; i < totalJobs; ++i)
         {
-            assert(ids[i] == static_cast<Job::Id>(i + 1));
+            REQUIRE(ids[i] == static_cast<Job::Id>(i + 1));
         }
     }
     return 0;

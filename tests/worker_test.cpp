@@ -1,6 +1,6 @@
 #include "job_system/worker.h"
 
-#include <cassert>
+#include "test_utils.h"
 #include <memory>
 #include <sstream>
 #include <string>
@@ -38,12 +38,12 @@ int main()
 
     const std::string logs = output.str();
 
-    assert(logs.find("worker=1") != std::string::npos);
-    assert(logs.find("job=1") != std::string::npos);
-    assert(logs.find("START") != std::string::npos);
-    assert(logs.find("status=COMPLETED") != std::string::npos);
+    REQUIRE(logs.find("worker=1") != std::string::npos);
+    REQUIRE(logs.find("job=1") != std::string::npos);
+    REQUIRE(logs.find("START") != std::string::npos);
+    REQUIRE(logs.find("status=COMPLETED") != std::string::npos);
 
-    assert(queue.empty());
+    REQUIRE(queue.empty());
 
     {
         ThreadSafeQueue<std::shared_ptr<Job>> queue;

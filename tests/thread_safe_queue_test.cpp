@@ -2,7 +2,7 @@
 #include "job_system/job.h"
 
 #include <atomic>
-#include <cassert>
+#include "test_utils.h"
 #include <thread>
 #include <vector>
 #include <memory>
@@ -11,19 +11,19 @@ int main()
 {
     ThreadSafeQueue<int> queue;
 
-    assert(queue.empty());
+    REQUIRE(queue.empty());
 
     queue.push(42);
 
-    assert(!queue.empty());
+    REQUIRE(!queue.empty());
 
     auto value = queue.waitAndPop();
 
-    assert(value.has_value());
-    assert(value.value() == 42);
+    REQUIRE(value.has_value());
+    REQUIRE(value.value() == 42);
 
-    assert(value == 42);
-    assert(queue.empty());
+    REQUIRE(value == 42);
+    REQUIRE(queue.empty());
 
 
     ThreadSafeQueue<int> threadedQueue;
@@ -35,7 +35,7 @@ int main()
         {
             auto value = threadedQueue.waitAndPop();
 
-            assert(value.has_value());
+            REQUIRE(value.has_value());
             result = value.value();
         }
     );
@@ -44,8 +44,8 @@ int main()
 
     worker.join();
 
-    assert(result == 123);
-    assert(threadedQueue.empty());
+    REQUIRE(result == 123);
+    REQUIRE(threadedQueue.empty());
 
 
     ThreadSafeQueue<int> stressQueue;
@@ -74,7 +74,7 @@ int main()
                 {
                     auto value = stressQueue.waitAndPop();
 
-                    assert(value.has_value());
+                    REQUIRE(value.has_value());
                     sum += value.value();
                 }
             }
@@ -114,9 +114,9 @@ int main()
         consumer.join();
     }
 
-    assert(stressQueue.empty());
+    REQUIRE(stressQueue.empty());
 
-    assert(sum == 500500);
+    REQUIRE(sum == 500500);
 
 
     {
@@ -170,10 +170,10 @@ int main()
         auto third = queue.waitAndPop();
         auto fourth = queue.waitAndPop();
 
-        assert(first.value()->id() == 2);
-        assert(second.value()->id() == 3);
-        assert(third.value()->id() == 4);
-        assert(fourth.value()->id() == 1);
+        REQUIRE(first.value()->id() == 2);
+        REQUIRE(second.value()->id() == 3);
+        REQUIRE(third.value()->id() == 4);
+        REQUIRE(fourth.value()->id() == 1);
     }
     return 0;
 }
