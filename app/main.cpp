@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <sstream>
+#include <chrono>
 
 std::string statusToString(JobStatus status)
 {
@@ -168,7 +169,8 @@ int main()
                     const auto id = manager.submit(
                         type,
                         priority,
-                        input
+                        input,
+                        std::chrono::seconds(30)
                     );
 
                     std::cout << "Job submitted. ID = "

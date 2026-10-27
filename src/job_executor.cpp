@@ -15,6 +15,7 @@ void JobExecutor::execute(Job& job)
     {
         case JobType::CalculateSum:
         {
+            
             const auto n = job.input();
 
             if (n < 0)
@@ -24,23 +25,25 @@ void JobExecutor::execute(Job& job)
                 return;
             }
 
-            std::int64_t sum = 0;
-
-            for (std::int64_t i = 1; i <= n; ++i)
+            if (n > 4294967295LL)
             {
-                if (job.cancelRequested())
-                {
-                    job.setStatus(JobStatus::Cancelled);
-                    return;
-                }
-                if (job.timedOut())
-                {
-                    job.setStatus(JobStatus::TimedOut);
-                    return;
-                }
-
-                sum += i;
+                job.setError("Input too large");
+                job.setStatus(JobStatus::Failed);
+                return;
             }
+
+            std::int64_t sum;
+
+            if (n % 2 == 0)
+            {
+                sum = (n / 2) * (n + 1);
+            }
+            else
+            {
+                sum = n * ((n + 1) / 2);
+            }
+
+            job.complete(std::to_string(sum));
 
             // Cancel mógł przyjść dokładnie po zakończeniu pętli
             if (job.cancelRequested())
@@ -62,9 +65,17 @@ void JobExecutor::execute(Job& job)
         {
             const auto milliseconds = job.input();
 
+            
             if (milliseconds < 0)
             {
                 job.setError("Sleep duration cannot be negative");
+                job.setStatus(JobStatus::Failed);
+                return;
+            }
+
+            if (milliseconds > 60000)
+            {
+                job.setError("Sleep duration too large");
                 job.setStatus(JobStatus::Failed);
                 return;
             }
@@ -115,6 +126,13 @@ void JobExecutor::execute(Job& job)
             if (n < 0)
             {
                 job.setError("Input cannot be negative");
+                job.setStatus(JobStatus::Failed);
+                return;
+            }
+
+            if (n > 1000000)
+            {
+                job.setError("Input too large");
                 job.setStatus(JobStatus::Failed);
                 return;
             }
