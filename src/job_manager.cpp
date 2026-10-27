@@ -138,7 +138,30 @@ bool JobManager::cancel(Job::Id id)
         job = it->second;
     }
 
-    return job->requestCancel();
+    const auto result = job->requestCancel();
+
+    if (result == CancelResult::Rejected)
+    {
+        return false;
+    }
+
+    if (result == CancelResult::CancelledBeforeStart)
+    {
+        if (job->markStatisticsRecorded())
+        {
+            const auto waitTime =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - job->queuedAt()
+                );
+
+            workerPool_.statistics().recordCancelled(
+                waitTime,
+                std::chrono::milliseconds(0)
+            );
+        }
+    }
+
+    return true;
 }
 
 const Statistics& JobManager::statistics() const

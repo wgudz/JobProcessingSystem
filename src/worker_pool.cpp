@@ -119,3 +119,8 @@ const Statistics& WorkerPool::statistics() const
 {
     return statistics_;
 }
+
+Statistics& WorkerPool::statistics()
+{
+    return statistics_;
+}

@@ -74,33 +74,37 @@ void Worker::run()
         std::string statusText;
 
         const auto status = job.value()->status();
-        if (status == JobStatus::Completed)
+
+        if (job.value()->markStatisticsRecorded())
         {
-            statistics_.recordCompleted(
-                waitTime,
-                executionTime
-            );
-        }
-        else if (status == JobStatus::Failed)
-        {
-            statistics_.recordFailed(
-                waitTime,
-                executionTime
-            );
-        }
-        else if (status == JobStatus::Cancelled)
-        {
-            statistics_.recordCancelled(
-                waitTime,
-                executionTime
-            );
-        }
-        else if (status == JobStatus::TimedOut)
-        {
-            statistics_.recordTimedOut(
-                waitTime,
-                executionTime
-            );
+            if (status == JobStatus::Completed)
+            {
+                statistics_.recordCompleted(
+                    waitTime,
+                    executionTime
+                );
+            }
+            else if (status == JobStatus::Failed)
+            {
+                statistics_.recordFailed(
+                    waitTime,
+                    executionTime
+                );
+            }
+            else if (status == JobStatus::Cancelled)
+            {
+                statistics_.recordCancelled(
+                    waitTime,
+                    executionTime
+                );
+            }
+            else if (status == JobStatus::TimedOut)
+            {
+                statistics_.recordTimedOut(
+                    waitTime,
+                    executionTime
+                );
+            }
         }
         switch (status)
         {

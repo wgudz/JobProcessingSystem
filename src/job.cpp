@@ -121,23 +121,23 @@ std::int64_t Job::input() const
     return input_;
 }
 
-bool Job::requestCancel()
+CancelResult Job::requestCancel()
 {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (status_ == JobStatus::Queued)
     {
         status_ = JobStatus::Cancelled;
-        return true;
+        return CancelResult::CancelledBeforeStart;
     }
 
     if (status_ == JobStatus::Running)
     {
         cancelRequested_ = true;
-        return true;
+        return CancelResult::CancellationRequested;
     }
 
-    return false;
+    return CancelResult::Rejected;
 }
 
 bool Job::cancelRequested() const
@@ -203,4 +203,17 @@ bool Job::complete(std::string result)
 std::chrono::steady_clock::time_point Job::queuedAt() const
 {
     return queuedAt_;
+}
+
+bool Job::markStatisticsRecorded()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (statisticsRecorded_)
+    {
+        return false;
+    }
+
+    statisticsRecorded_ = true;
+    return true;
 }

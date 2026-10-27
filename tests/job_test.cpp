@@ -85,7 +85,10 @@ int main()
 
         REQUIRE(job.setStatus(JobStatus::Running));
 
-        REQUIRE(job.requestCancel());
+        REQUIRE(
+            job.requestCancel() ==
+            CancelResult::CancellationRequested
+        );
 
         const bool completed = job.complete("55");
 
@@ -110,7 +113,10 @@ int main()
         REQUIRE(job.status() == JobStatus::Completed);
         REQUIRE(job.result().value() == "55");
 
-        REQUIRE(!job.requestCancel());
+        REQUIRE(
+            job.requestCancel() ==
+            CancelResult::Rejected
+        );
     }
 
     {

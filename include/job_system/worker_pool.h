@@ -22,6 +22,7 @@ public:
     void stop();
 
     const Statistics& statistics() const;
+    Statistics& statistics();
 
 private:
     private:

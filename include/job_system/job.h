@@ -30,6 +30,13 @@ enum class JobPriority
     High
 };
 
+enum class CancelResult
+{
+    Rejected,
+    CancelledBeforeStart,
+    CancellationRequested
+};
+
 class Job
 {
 public:
@@ -57,7 +64,9 @@ public:
 
     std::int64_t input() const;
 
-    bool requestCancel();
+    CancelResult requestCancel();
+    bool markStatisticsRecorded();
+
     bool cancelRequested() const;
 
     void setTimeout(std::chrono::milliseconds timeout);
@@ -85,5 +94,7 @@ private:
     std::optional<std::chrono::steady_clock::time_point> startedAt_;
 
     std::chrono::steady_clock::time_point queuedAt_;
+
+    bool statisticsRecorded_ = false;
 
 };
