@@ -78,7 +78,6 @@ int main()
         std::cout << "4. Cancel job\n";
         std::cout << "5. Statistics\n";
         std::cout << "6. Exit\n";
-        std::cout << "Choice: ";
 
         int choice = 0;
         if (!readValue("Choice: ", choice))
@@ -95,7 +94,6 @@ int main()
                 std::cout << "1. CalculateSum\n";
                 std::cout << "2. Sleep\n";
                 std::cout << "3. CountPrimes\n";
-                std::cout << "Choice: ";
 
                 int typeChoice = 0;
                 if (!readValue("Choice: ", typeChoice))
@@ -128,7 +126,6 @@ int main()
                 std::cout << "1. Low\n";
                 std::cout << "2. Normal\n";
                 std::cout << "3. High\n";
-                std::cout << "Choice: ";
 
                 int priorityChoice = 0;
                 if (!readValue("Choice: ", priorityChoice))
