@@ -108,5 +108,46 @@ int main()
 
         assert(elapsed.count() < 1000);
     }
+
+    {
+        WorkerPool pool(1);
+
+        pool.start();
+
+        bool exceptionThrown = false;
+
+        try
+        {
+            pool.start();
+        }
+        catch (const std::logic_error&)
+        {
+            exceptionThrown = true;
+        }
+
+        assert(exceptionThrown);
+
+        pool.stop();
+    }
+
+    {
+        WorkerPool pool(1);
+
+        pool.start();
+        pool.stop();
+
+        bool exceptionThrown = false;
+
+        try
+        {
+            pool.start();
+        }
+        catch (const std::logic_error&)
+        {
+            exceptionThrown = true;
+        }
+
+        assert(exceptionThrown);
+    }
     return 0;
 }

@@ -51,12 +51,26 @@ WorkerPool::~WorkerPool()
 
 void WorkerPool::start()
 {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+
+    if (state_ == State::Running)
+    {
+        throw std::logic_error("WorkerPool is already running");
+    }
+
+    if (state_ == State::Stopped)
+    {
+        throw std::logic_error("WorkerPool cannot be restarted");
+    }
+
     try
     {
         for (auto& worker : workers_)
         {
             worker->start();
         }
+
+        state_ = State::Running;
     }
     catch (...)
     {
@@ -67,6 +81,7 @@ void WorkerPool::start()
             worker->join();
         }
 
+        state_ = State::Stopped;
         throw;
     }
 }
@@ -78,12 +93,21 @@ bool WorkerPool::submit(std::shared_ptr<Job> job)
 
 void WorkerPool::stop()
 {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+
+    if (state_ == State::Stopped)
+    {
+        return;
+    }
+
     queue_.close();
 
     for (auto& worker : workers_)
     {
         worker->join();
     }
+
+    state_ = State::Stopped;
 }
 
 const Statistics& WorkerPool::statistics() const

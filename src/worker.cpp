@@ -1,5 +1,7 @@
 #include "job_system/worker.h"
 
+#include <stdexcept>
+
 Worker::Worker(
     ThreadSafeQueue<std::shared_ptr<Job>>& queue,
     Logger& logger,
@@ -15,6 +17,11 @@ Worker::Worker(
 
 void Worker::start()
 {
+    if (thread_.joinable())
+    {
+        throw std::logic_error("Worker is already running");
+    }
+
     thread_ = std::thread(
         [this]()
         {

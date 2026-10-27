@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
+#include <mutex>
 
 class WorkerPool
 {
@@ -28,4 +29,14 @@ private:
     Logger logger_;
     Statistics statistics_;
     std::vector<std::unique_ptr<Worker>> workers_;
+
+    enum class State
+    {
+        Created,
+        Running,
+        Stopped
+    };
+
+    std::mutex stateMutex_;
+    State state_ = State::Created;
 };
