@@ -45,5 +45,24 @@ int main()
 
     assert(queue.empty());
 
+    {
+        ThreadSafeQueue<std::shared_ptr<Job>> queue;
+
+        std::ostringstream output;
+        Logger logger(output);
+        Statistics statistics;
+
+        Worker worker(
+            queue,
+            logger,
+            statistics,
+            1
+        );
+
+        worker.start();
+
+        queue.close();
+    }
+
     return 0;
 }

@@ -20,6 +20,8 @@ public:
         std::size_t workerId
     );
 
+    ~Worker();
+
     void start();
     void join();
     

@@ -15,6 +15,11 @@ Worker::Worker(
 {
 }
 
+Worker::~Worker()
+{
+    join();
+}
+
 void Worker::start()
 {
     if (thread_.joinable())
