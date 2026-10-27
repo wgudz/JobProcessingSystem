@@ -149,5 +149,22 @@ int main()
 
         REQUIRE(exceptionThrown);
     }
+
+    {
+        WorkerPool pool(1);
+
+        bool exceptionThrown = false;
+
+        try
+        {
+            pool.submit(nullptr);
+        }
+        catch (const std::invalid_argument&)
+        {
+            exceptionThrown = true;
+        }
+
+        REQUIRE(exceptionThrown);
+    }
     return 0;
 }

@@ -88,6 +88,11 @@ void WorkerPool::start()
 
 bool WorkerPool::submit(std::shared_ptr<Job> job)
 {
+    if (!job)
+    {
+        throw std::invalid_argument("Job cannot be null");
+    }
+
     return queue_.push(std::move(job));
 }
 
