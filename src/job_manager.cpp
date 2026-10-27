@@ -14,6 +14,7 @@ Job::Id JobManager::submit(
     std::optional<std::chrono::milliseconds> timeout
 )
 {
+    cleanupFinishedJobs();
     Job::Id id;
 
     {
@@ -44,7 +45,7 @@ Job::Id JobManager::submit(
         jobs_.erase(id);
 
         throw std::runtime_error(
-            "System is shutting down"
+            "System is not accepting new jobs"
         );
     }
 
@@ -167,4 +168,32 @@ bool JobManager::cancel(Job::Id id)
 const Statistics& JobManager::statistics() const
 {
     return workerPool_.statistics();
+}
+
+void JobManager::cleanupFinishedJobs()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (jobs_.size() < MaxStoredJobs)
+    {
+        return;
+    }
+
+    for (auto it = jobs_.begin();
+         it != jobs_.end() && jobs_.size() >= MaxStoredJobs;)
+    {
+        const auto status = it->second->status();
+
+        if (status == JobStatus::Completed ||
+            status == JobStatus::Failed ||
+            status == JobStatus::Cancelled ||
+            status == JobStatus::TimedOut)
+        {
+            it = jobs_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }

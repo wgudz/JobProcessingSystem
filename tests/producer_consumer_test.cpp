@@ -8,7 +8,7 @@
 
 int main()
 {
-    ThreadSafeQueue<int> queue;
+    ThreadSafeQueue<int> queue(nullptr, 25000);
 
     constexpr int producerCount = 4;
     constexpr int consumerCount = 4;

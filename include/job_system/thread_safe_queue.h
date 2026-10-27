@@ -12,13 +12,15 @@ class ThreadSafeQueue
 {
 public:
     explicit ThreadSafeQueue(
-        std::function<int(const T&)> getPriority = nullptr
+        std::function<int(const T&)> getPriority = nullptr,
+        std::size_t maxSize = 1000
     );
 
     bool push(T value);
     std::optional<T> waitAndPop();
     void close();
     bool empty() const;
+    
 
 private:
     std::queue<T> highQueue_;
@@ -30,14 +32,18 @@ private:
     bool closed_ = false;
 
     std::function<int(const T&)> getPriority_;
+
+    std::size_t maxSize_;
 };
 
 
 template <typename T>
 ThreadSafeQueue<T>::ThreadSafeQueue(
-    std::function<int(const T&)> getPriority
+    std::function<int(const T&)> getPriority,
+    std::size_t maxSize
 )
-    : getPriority_(std::move(getPriority))
+    : getPriority_(std::move(getPriority)),
+      maxSize_(maxSize)
 {
 }
 
@@ -56,6 +62,16 @@ bool ThreadSafeQueue<T>::push(T value)
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
+
+        const auto currentSize =
+            highQueue_.size() +
+            normalQueue_.size() +
+            lowQueue_.size();
+
+        if (currentSize >= maxSize_)
+        {
+            return false;
+        }
 
         if (closed_)
         {

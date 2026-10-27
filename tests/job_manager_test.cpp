@@ -226,7 +226,7 @@ int main()
         JobManager manager(4);
 
         constexpr int threadCount = 4;
-        constexpr int jobsPerThread = 1000;
+        constexpr int jobsPerThread = 200;
         constexpr int totalJobs = threadCount * jobsPerThread;
 
         std::vector<Job::Id> ids;

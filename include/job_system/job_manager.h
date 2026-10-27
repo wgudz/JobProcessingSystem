@@ -36,6 +36,9 @@ public:
     bool cancel(Job::Id id);
 
     const Statistics& statistics() const;
+
+    void cleanupFinishedJobs();
+
 private:
     mutable std::mutex mutex_;
 
@@ -43,4 +46,5 @@ private:
     Job::Id nextId_ = 1;
     std::unordered_map<Job::Id, std::shared_ptr<Job>> jobs_;
 
+    static constexpr std::size_t MaxStoredJobs = 1000;
 };
