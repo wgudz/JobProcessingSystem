@@ -37,7 +37,7 @@ public:
 
     const Statistics& statistics() const;
 
-    void cleanupFinishedJobs();
+    bool remove(Job::Id id);
 
 private:
     mutable std::mutex mutex_;

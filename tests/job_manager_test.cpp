@@ -295,5 +295,65 @@ int main()
 
         REQUIRE(exceptionThrown);
     }
+
+    {
+        JobManager manager(1);
+        manager.start();
+
+        const auto id = manager.submit(
+            JobType::CalculateSum,
+            JobPriority::Normal,
+            10
+        );
+
+        manager.stop();
+
+        REQUIRE(manager.status(id) == JobStatus::Completed);
+        REQUIRE(manager.result(id).has_value());
+        REQUIRE(manager.result(id).value() == "55");
+    }
+
+    {
+        JobManager manager(1);
+        manager.start();
+
+        const auto id = manager.submit(
+            JobType::CalculateSum,
+            JobPriority::Normal,
+            10
+        );
+
+        manager.stop();
+
+        REQUIRE(manager.remove(id));
+
+        bool exceptionThrown = false;
+
+        try
+        {
+            manager.result(id);
+        }
+        catch (const std::out_of_range&)
+        {
+            exceptionThrown = true;
+        }
+
+        REQUIRE(exceptionThrown);
+    }
+
+    {
+        JobManager manager(1);
+        manager.start();
+
+        const auto id = manager.submit(
+            JobType::Sleep,
+            JobPriority::Normal,
+            500
+        );
+
+        REQUIRE(!manager.remove(id));
+
+        manager.stop();
+    }
     return 0;
 }

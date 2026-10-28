@@ -14,7 +14,6 @@ Job::Id JobManager::submit(
     std::optional<std::chrono::milliseconds> timeout
 )
 {
-    cleanupFinishedJobs();
     Job::Id id;
 
     {
@@ -36,6 +35,14 @@ Job::Id JobManager::submit(
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
+
+        if (jobs_.size() >= MaxStoredJobs)
+        {
+            throw std::runtime_error(
+                "Job storage is full"
+            );
+        }
+
         jobs_.emplace(id, job);
     }
 
@@ -170,30 +177,36 @@ const Statistics& JobManager::statistics() const
     return workerPool_.statistics();
 }
 
-void JobManager::cleanupFinishedJobs()
-{
-    std::lock_guard<std::mutex> lock(mutex_);
 
-    if (jobs_.size() < MaxStoredJobs)
+bool JobManager::remove(Job::Id id)
+{
+    std::shared_ptr<Job> job;
+
     {
-        return;
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        const auto it = jobs_.find(id);
+
+        if (it == jobs_.end())
+        {
+            return false;
+        }
+
+        job = it->second;
     }
 
-    for (auto it = jobs_.begin();
-         it != jobs_.end() && jobs_.size() >= MaxStoredJobs;)
-    {
-        const auto status = it->second->status();
+    const auto status = job->status();
 
-        if (status == JobStatus::Completed ||
-            status == JobStatus::Failed ||
-            status == JobStatus::Cancelled ||
-            status == JobStatus::TimedOut)
-        {
-            it = jobs_.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
+    if (status != JobStatus::Completed &&
+        status != JobStatus::Failed &&
+        status != JobStatus::Cancelled &&
+        status != JobStatus::TimedOut)
+    {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return jobs_.erase(id) > 0;
     }
 }
