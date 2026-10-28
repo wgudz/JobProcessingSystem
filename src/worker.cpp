@@ -1,6 +1,7 @@
 #include "job_system/worker.h"
 
 #include <stdexcept>
+#include <exception>
 
 Worker::Worker(
     ThreadSafeQueue<std::shared_ptr<Job>>& queue,
@@ -34,7 +35,14 @@ void Worker::start()
     thread_ = std::thread(
         [this]()
         {
-            run();
+            try
+            {
+                run();
+            }
+            catch (...)
+            {
+
+            }
         }
     );
 }
@@ -50,12 +58,19 @@ void Worker::run()
             break;
         }
         
-        logger_.log(
-            LogLevel::Info,
-            workerId_,
-            job.value()->id(),
-            "START"
-        );
+        try
+        {
+            logger_.log(
+                LogLevel::Info,
+                workerId_,
+                job.value()->id(),
+                "START"
+            );
+        }
+        catch (...)
+        {
+
+        }
 
         const auto executionStart =
             std::chrono::steady_clock::now();
@@ -65,7 +80,20 @@ void Worker::run()
                 executionStart - job.value()->queuedAt()
             );
 
-        executor_.execute(*job.value());
+        try
+        {
+            executor_.execute(*job.value());
+        }
+        catch (const std::exception& e)
+        {
+            job.value()->setError(e.what());
+            job.value()->setStatus(JobStatus::Failed);
+        }
+        catch (...)
+        {
+            job.value()->setError("Unknown execution error");
+            job.value()->setStatus(JobStatus::Failed);
+        }
 
         const auto executionEnd =
             std::chrono::steady_clock::now();
@@ -137,12 +165,18 @@ void Worker::run()
                 break;
         }
 
-        logger_.log(
-            LogLevel::Info,
-            workerId_,
-            job.value()->id(),
-            "status=" + statusText
-        );
+        try
+        {
+            logger_.log(
+                LogLevel::Info,
+                workerId_,
+                job.value()->id(),
+                "status=" + statusText
+            );
+        }
+        catch (...)
+        {
+        }
     }
 }
 void Worker::join()
