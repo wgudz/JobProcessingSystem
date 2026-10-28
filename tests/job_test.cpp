@@ -157,5 +157,33 @@ int main()
 
         REQUIRE(job.status() == JobStatus::Cancelled);
     }
+
+    {
+        Job job(
+            104,
+            JobType::CalculateSum,
+            JobPriority::Normal,
+            10
+        );
+
+        REQUIRE(job.setStatus(JobStatus::Running));
+
+        REQUIRE(
+            job.requestCancel() ==
+            CancelResult::CancellationRequested
+        );
+
+        REQUIRE(job.setStatus(JobStatus::Failed));
+        REQUIRE(job.status() == JobStatus::Failed);
+
+        REQUIRE(!job.setStatus(JobStatus::Completed));
+        REQUIRE(job.status() == JobStatus::Failed);
+
+        REQUIRE(!job.setStatus(JobStatus::Cancelled));
+        REQUIRE(job.status() == JobStatus::Failed);
+
+        REQUIRE(!job.setStatus(JobStatus::TimedOut));
+        REQUIRE(job.status() == JobStatus::Failed);
+    }
     return 0;
 }
