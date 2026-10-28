@@ -93,6 +93,13 @@ bool WorkerPool::submit(std::shared_ptr<Job> job)
         throw std::invalid_argument("Job cannot be null");
     }
 
+    std::lock_guard<std::mutex> lock(stateMutex_);
+
+    if (state_ != State::Running)
+    {
+        return false;
+    }
+
     return queue_.push(std::move(job));
 }
 

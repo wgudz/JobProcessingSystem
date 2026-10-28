@@ -106,6 +106,8 @@ int main()
     {
         JobManager manager(1);
 
+        manager.start();
+
         const auto id = manager.submit(
             JobType::Sleep,
             JobPriority::Normal,
@@ -225,6 +227,8 @@ int main()
     {
         JobManager manager(4);
 
+        manager.start();
+
         constexpr int threadCount = 4;
         constexpr int jobsPerThread = 200;
         constexpr int totalJobs = threadCount * jobsPerThread;
@@ -269,6 +273,27 @@ int main()
         {
             REQUIRE(ids[i] == static_cast<Job::Id>(i + 1));
         }
+    }
+
+    {
+        JobManager manager(1);
+
+        bool exceptionThrown = false;
+
+        try
+        {
+            manager.submit(
+                JobType::CalculateSum,
+                JobPriority::Normal,
+                10
+            );
+        }
+        catch (const std::runtime_error&)
+        {
+            exceptionThrown = true;
+        }
+
+        REQUIRE(exceptionThrown);
     }
     return 0;
 }

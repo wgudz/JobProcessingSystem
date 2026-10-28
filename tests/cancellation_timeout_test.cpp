@@ -10,6 +10,8 @@ int main()
     {
         JobManager manager(1);
 
+        manager.start();
+
         const auto id = manager.submit(
             JobType::Sleep,
             JobPriority::Normal,
