@@ -64,5 +64,30 @@ int main()
         queue.close();
     }
 
+    {
+        ThreadSafeQueue<std::shared_ptr<Job>> queue;
+
+        std::ostringstream output;
+        Logger logger(output);
+        Statistics statistics;
+
+        {
+            Worker worker(
+                queue,
+                logger,
+                statistics,
+                1
+            );
+
+            worker.start();
+
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(50)
+            );
+
+        }
+
+    }
+
     return 0;
 }

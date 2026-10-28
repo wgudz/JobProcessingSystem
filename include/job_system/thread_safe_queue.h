@@ -6,6 +6,7 @@
 #include <utility>
 #include <optional>
 #include <functional>
+#include <atomic>
 
 template <typename T>
 class ThreadSafeQueue
@@ -17,9 +18,16 @@ public:
     );
 
     bool push(T value);
-    std::optional<T> waitAndPop();
     void close();
     bool empty() const;
+
+    std::optional<T> waitAndPop();
+
+    std::optional<T> waitAndPop(
+    const std::atomic<bool>& stopRequested
+    );
+
+    void notifyAll();
     
 
 private:
@@ -148,6 +156,58 @@ std::optional<T> ThreadSafeQueue<T>::waitAndPop()
 }
 
 template <typename T>
+std::optional<T> ThreadSafeQueue<T>::waitAndPop(
+    const std::atomic<bool>& stopRequested
+)
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+
+    condition_.wait(
+        lock,
+        [this, &stopRequested]()
+        {
+            return stopRequested.load()
+                || closed_
+                || !highQueue_.empty()
+                || !normalQueue_.empty()
+                || !lowQueue_.empty();
+        }
+    );
+
+    if (stopRequested.load())
+    {
+        return std::nullopt;
+    }
+
+    if (highQueue_.empty()
+        && normalQueue_.empty()
+        && lowQueue_.empty())
+    {
+        return std::nullopt;
+    }
+
+    T value;
+
+    if (!highQueue_.empty())
+    {
+        value = std::move(highQueue_.front());
+        highQueue_.pop();
+    }
+    else if (!normalQueue_.empty())
+    {
+        value = std::move(normalQueue_.front());
+        normalQueue_.pop();
+    }
+    else
+    {
+        value = std::move(lowQueue_.front());
+        lowQueue_.pop();
+    }
+
+    return value;
+}
+
+template <typename T>
 void ThreadSafeQueue<T>::close()
 {
     {
@@ -155,5 +215,11 @@ void ThreadSafeQueue<T>::close()
         closed_ = true;
     }
 
+    condition_.notify_all();
+}
+
+template <typename T>
+void ThreadSafeQueue<T>::notifyAll()
+{
     condition_.notify_all();
 }

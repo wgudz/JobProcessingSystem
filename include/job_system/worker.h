@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <thread>
 #include <memory>
+#include <atomic>
 
 class Worker
 {
@@ -36,4 +37,6 @@ private:
     std::size_t workerId_;
 
     Statistics& statistics_;
+
+    std::atomic<bool> stopRequested_ = false;
 };

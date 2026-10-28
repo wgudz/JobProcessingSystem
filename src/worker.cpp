@@ -17,6 +17,10 @@ Worker::Worker(
 
 Worker::~Worker()
 {
+    stopRequested_ = true;
+
+    queue_.notifyAll();
+
     join();
 }
 
@@ -39,7 +43,7 @@ void Worker::run()
 {
     while (true)
     {
-        auto job = queue_.waitAndPop();
+        auto job = queue_.waitAndPop(stopRequested_);
 
         if (!job.has_value())
         {
