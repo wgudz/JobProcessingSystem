@@ -1,0 +1,3 @@
+interface:
+  display_name: "Job Processing Triage"
+  short_description: "Evidence-based C++20 job scheduling and CI investigation"

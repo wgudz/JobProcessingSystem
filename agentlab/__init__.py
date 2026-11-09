@@ -1,0 +1,2 @@
+"""Local C++ CI analysis agent lab. No paid API dependencies."""
+__version__ = "1.0.0"
