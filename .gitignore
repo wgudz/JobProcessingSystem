@@ -3,3 +3,6 @@ build/
 .vs/
 /build/
 /reports/
+
+__pycache__/
+*.pyc
