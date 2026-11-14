@@ -12,6 +12,8 @@ from agentlab.skill_loader import load_skill
 from agentlab.tools import ToolExecutor, TOOL_SCHEMAS
 from agentlab.cli import main
 
+from urllib.error import HTTPError
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -410,7 +412,135 @@ class ProviderTest(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertFalse(payload['stream'])
         self.assertEqual(payload['model'], 'qwen3:4b')
+    def test_timeout(self):
+        with patch(
+            'agentlab.providers.urlopen',
+            side_effect=TimeoutError()
+        ) as fn:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                'Ollama timeout'
+            ):
+                OllamaProvider(
+                    'qwen3:4b',
+                    retries=1
+                ).chat([], [])
 
+        self.assertEqual(fn.call_count, 2)
+
+
+    def test_http_404(self):
+        error = HTTPError(
+            'http://127.0.0.1',
+            404,
+            'Not Found',
+            None,
+            None
+        )
+
+        with patch(
+            'agentlab.providers.urlopen',
+            side_effect=error
+        ) as fn:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                'Ollama HTTP 404'
+            ):
+                OllamaProvider('qwen3:4b').chat([], [])
+
+        self.assertEqual(fn.call_count, 1)
+
+
+    def test_http_500_is_retried(self):
+        error = HTTPError(
+            'http://127.0.0.1',
+            500,
+            'Server Error',
+            None,
+            None
+        )
+
+        with patch(
+            'agentlab.providers.urlopen',
+            side_effect=error
+        ) as fn:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                'Ollama HTTP 500'
+            ):
+                OllamaProvider(
+                    'qwen3:4b',
+                    retries=1
+                ).chat([], [])
+
+        self.assertEqual(fn.call_count, 2)
+
+
+    def test_empty_response(self):
+        response = io.BytesIO(b'')
+
+        with patch(
+            'agentlab.providers.urlopen',
+            return_value=response
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                'empty response'
+            ):
+                OllamaProvider('qwen3:4b').chat([], [])
+
+
+    def test_invalid_json(self):
+        response = io.BytesIO(b'{broken json')
+
+        with patch(
+            'agentlab.providers.urlopen',
+            return_value=response
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                'invalid JSON'
+            ):
+                OllamaProvider('qwen3:4b').chat([], [])
+
+
+    def test_missing_message(self):
+        response = io.BytesIO(
+            json.dumps({}).encode()
+        )
+
+        with patch(
+            'agentlab.providers.urlopen',
+            return_value=response
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                'missing message'
+            ):
+                OllamaProvider('qwen3:4b').chat([], [])
+
+
+    def test_invalid_tool_calls(self):
+        response = io.BytesIO(
+            json.dumps({
+                'message': {
+                    'content': '',
+                    'tool_calls': [
+                        {'wrong': 'format'}
+                    ]
+                }
+            }).encode()
+        )
+
+        with patch(
+            'agentlab.providers.urlopen',
+            return_value=response
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                'invalid tool_calls'
+            ):
+                OllamaProvider('qwen3:4b').chat([], [])
 
 if __name__ == '__main__':
     unittest.main()

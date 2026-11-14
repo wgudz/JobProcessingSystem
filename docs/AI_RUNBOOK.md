@@ -73,3 +73,26 @@ MOCK potwierdza działanie infrastruktury i deterministycznej pętli narzędzi, 
 Ollama wykorzystuje rzeczywisty model językowy, który sam wybiera narzędzia i generuje wnioski na podstawie zebranych dowodów.
 
 Dlatego poprawny przebieg MOCK nie zastępuje testu z rzeczywistym modelem.
+
+## AG-103 — Obsługa błędów Ollama
+
+| Sytuacja | Wynik adaptera | Retry |
+|---|---|---|
+| HTTP 4xx | błąd żądania | nie |
+| HTTP 5xx | błąd serwera | 1 |
+| Timeout | błąd timeoutu | 1 |
+| Brak połączenia | błąd transportu | 1 |
+| Pusta odpowiedź | błąd odpowiedzi | nie |
+| Niepoprawny JSON | błąd odpowiedzi | nie |
+| Brak `message` | błąd odpowiedzi | nie |
+| Błędne `tool_calls` | błąd odpowiedzi modelu | nie |
+| Zbyt duże wejście | żądanie odrzucone przed HTTP | nie |
+
+Domyślny host to `http://127.0.0.1:11434`. Inny host musi zostać
+jawnie przekazany podczas tworzenia `OllamaProvider`.
+
+Ponawiane są wyłącznie błędy przejściowe: HTTP 5xx, timeout i błąd
+połączenia. Błędy 4xx oraz błędna struktura odpowiedzi nie są ponawiane.
+
+Komunikaty błędów są krótkie i nie zawierają treści wiadomości,
+plików ani pełnej odpowiedzi modelu.
