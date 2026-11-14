@@ -1,0 +1,32 @@
+﻿usage: python -m agentlab [-h] [--provider {mock,ollama}] [--model MODEL]
+                          [--workspace WORKSPACE] [--skill SKILL]
+                          [--issue-id ISSUE_ID] [--issue-file ISSUE_FILE]
+                          [--output-json OUTPUT_JSON] [--allow-exec]
+                          [--max-steps MAX_STEPS] [--report REPORT]
+
+JobProcessingSystem AI Lab (local Ollama, no paid API)
+
+options:
+  -h, --help            show this help message and exit
+  --provider {mock,ollama}
+  --model MODEL
+  --workspace WORKSPACE
+  --skill SKILL
+  --issue-id ISSUE_ID   Incident identifier, e.g. BUG-001
+  --issue-file ISSUE_FILE
+                        Path to incident JSON inside workspace
+  --output-json OUTPUT_JSON
+                        Optional machine-readable JSON report
+  --allow-exec          Run CMake and CTest on TRUSTED code only
+  --max-steps MAX_STEPS
+  --report REPORT
+
+Examples:
+  File-only analysis:
+    python -m agentlab --provider mock --issue-id BUG-001 --issue-file issues\BUG-001.json
+
+  Analysis with tests:
+    python -m agentlab --provider ollama --model qwen3:4b --issue-id BUG-001 --issue-file issues\BUG-001.json --allow-exec
+
+  Analysis with Skill:
+    python -m agentlab --provider ollama --model qwen3:4b --issue-id BUG-001 --issue-file issues\BUG-001.json --skill job-processing-triage --allow-exec

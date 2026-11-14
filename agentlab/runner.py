@@ -27,15 +27,29 @@ class AgentResult:
 
 
 def run_agent(project_root: Path, workspace: Path, skill_name: str, provider,
+              issue_id=None, issue=None,
               allow_exec=False, max_steps=14) -> AgentResult:
     skill = load_skill(project_root / 'skills', skill_name)
     executor = ToolExecutor(workspace, allow_exec=allow_exec)
+
+    if issue:
+        issue_text = (
+            f'Issue ID: {issue_id}\n'
+            f'Title: {issue["title"]}\n'
+            f'Symptoms: {issue["symptoms"]}\n'
+            f'Expected: {issue["expected"]}\n'
+            f'Suspected tests: {issue["suspected_tests"]}\n'
+        )
+    else:
+        issue_text = 'No specific issue was provided.'
+
     messages = [
-        {'role': 'system', 'content': SYSTEM + '\n\nSKILL.md:\n' + skill},
         {'role': 'user', 'content': (
-            'Investigate current JobProcessingSystem C++20 regression. '
-            'Inspect build/tests if allowed, inspect source and Git diff, '
-            'propose a minimal patch without applying it, and write a verifiable report.')},
+            'Investigate the following JobProcessingSystem C++20 incident.\n\n'
+            + issue_text +
+            '\nInspect build/tests if allowed, inspect source and Git diff, '
+            'propose a minimal patch without applying it, and write a verifiable report.'
+        )},
     ]
     evidence = []
     final_text = ''
@@ -79,3 +93,21 @@ def save_report(result: AgentResult, output: Path, workspace: Path, skill_name: 
                              indent=2, ensure_ascii=False), '```', '']
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text('\n'.join(lines), encoding='utf-8')
+
+def save_json_report(result: AgentResult, output: Path, workspace: Path,
+                     skill_name: str, issue_id=None) -> None:
+    data = {
+        'issue_id': issue_id,
+        'provider': result.provider,
+        'model': result.model,
+        'workspace': str(Path(workspace).resolve()),
+        'skill': skill_name,
+        'conclusion': result.report,
+        'events': result.events
+    }
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding='utf-8'
+    )

@@ -10,6 +10,7 @@ from agentlab.providers import MockProvider, OllamaProvider
 from agentlab.runner import run_agent, save_report
 from agentlab.skill_loader import load_skill
 from agentlab.tools import ToolExecutor, TOOL_SCHEMAS
+from agentlab.cli import main
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -26,6 +27,116 @@ class BaseCase(unittest.TestCase):
         (self.ws / 'include/job_system/thread_safe_queue.h').write_text('template<class T> class ThreadSafeQueue {};\n')
         (self.ws / 'tests/thread_safe_queue_test.cpp').write_text('int main(){return 0;}\n')
 
+class CliTest(BaseCase):
+    def test_issue_id_requires_issue_file(self):
+        stderr = io.StringIO()
+
+        with patch('sys.stderr', stderr):
+            with self.assertRaises(SystemExit) as context:
+                main(['--issue-id', 'BUG-001'])
+
+        self.assertEqual(context.exception.code, 2)
+        self.assertIn(
+            '--issue-id and --issue-file must be used together',
+            stderr.getvalue()
+        )
+    def test_invalid_issue_json_is_rejected(self):
+        issue_file = self.ws / 'bad.json'
+        issue_file.write_text(
+            '{"title": "Błąd", "symptoms": }',
+            encoding='utf-8'
+        )
+
+        report = self.ws / 'report.md'
+        stderr = io.StringIO()
+
+        with patch('sys.stderr', stderr):
+            with self.assertRaises(SystemExit) as context:
+                main([
+                    '--workspace', str(self.ws),
+                    '--issue-id', 'BAD-001',
+                    '--issue-file', 'bad.json',
+                    '--report', str(report)
+                ])
+
+        self.assertEqual(context.exception.code, 2)
+        self.assertIn('Invalid JSON in issue file', stderr.getvalue())
+        self.assertFalse(report.exists())
+
+    def test_issue_file_outside_workspace_is_rejected(self):
+        outside_file = Path(self.tmp.name).parent / 'outside-issue.json'
+        outside_file.write_text(
+            '{"title":"X","symptoms":"Y","expected":"Z"}',
+            encoding='utf-8'
+        )
+        self.addCleanup(lambda: outside_file.unlink(missing_ok=True))
+
+        stderr = io.StringIO()
+
+        with patch('sys.stderr', stderr):
+            with self.assertRaises(SystemExit) as context:
+                main([
+                    '--workspace', str(self.ws),
+                    '--issue-id', 'OUTSIDE-001',
+                    '--issue-file', str(outside_file)
+                ])
+
+        self.assertEqual(context.exception.code, 2)
+        self.assertIn(
+            '--issue-file must be inside workspace',
+            stderr.getvalue()
+        )
+
+    def test_valid_issue_runs_with_mock(self):
+        issue_file = self.ws / 'issue.json'
+        issue_file.write_text(
+            json.dumps({
+                'title': 'Worker shutdown problem',
+                'symptoms': 'worker_test hangs',
+                'expected': 'Worker should stop',
+                'suspected_tests': ['worker_test']
+            }),
+            encoding='utf-8'
+        )
+
+        report = self.ws / 'report.md'
+        output_json = self.ws / 'report.json'
+        stdout = io.StringIO()
+
+        with patch('sys.stdout', stdout):
+            result = main([
+                '--provider', 'mock',
+                '--workspace', str(self.ws),
+                '--issue-id', 'BUG-001',
+                '--issue-file', 'issue.json',
+                '--report', str(report),
+                '--output-json', str(output_json)
+            ])
+
+        self.assertEqual(result, 0)
+        self.assertTrue(report.exists())
+        self.assertTrue(output_json.exists())
+
+        data = json.loads(output_json.read_text(encoding='utf-8'))
+        self.assertEqual(data['issue_id'], 'BUG-001')
+
+    def test_missing_workspace_is_rejected(self):
+        missing_workspace = self.ws / 'does-not-exist'
+        stderr = io.StringIO()
+
+        with patch('sys.stderr', stderr):
+            with self.assertRaises(SystemExit) as context:
+                main([
+                    '--workspace', str(missing_workspace),
+                    '--issue-id', 'BUG-001',
+                    '--issue-file', 'issue.json'
+                ])
+
+        self.assertEqual(context.exception.code, 2)
+        self.assertIn(
+            'Workspace directory not found',
+            stderr.getvalue()
+    )
 
 class SafeToolsTest(BaseCase):
     def test_list_files_works(self):

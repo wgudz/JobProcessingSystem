@@ -1,0 +1,8 @@
+{
+  "title": "Worker nie kończy pracy poprawnie",
+  "symptoms": "worker_test zawiesza się podczas zamykania systemu",
+  "expected": "Worker powinien zakończyć pracę i join() powinien wrócić",
+  "suspected_tests": [
+    "worker_test"
+  ]
+}
