@@ -235,9 +235,20 @@ class AgentTest(BaseCase):
         self.assertIn('Unknown tool', agent.events[0]['result']['error'])
 
     def test_respects_step_limit(self):
-        agent = run_agent(ROOT, self.ws, 'job-processing-triage', MockProvider(), max_steps=1)
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            MockProvider(),
+            max_steps=1
+        )
+
         self.assertEqual(len(agent.events), 1)
-        self.assertIn('MOCK', agent.report)
+        self.assertEqual(agent.status, 'BLOCKED')
+        self.assertEqual(agent.termination_reason, 'max_steps_reached')
+        self.assertEqual(agent.steps, 1)
+        self.assertEqual(agent.tool_calls, 1)
+        self.assertIn('Analysis incomplete', agent.report)
 
     def test_multiple_tool_calls(self):
         class Multi:
@@ -266,6 +277,126 @@ class AgentTest(BaseCase):
         executor = ToolExecutor(self.ws, allow_exec=True)
         for cmd in ('git_commit', 'git_push', 'write_file', 'delete_file', 'run_command'):
             self.assertIn('Unknown tool', executor.execute(cmd, {})['error'])
+
+    def test_completed_after_collecting_evidence(self):
+        class Provider:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, messages, tools):
+                self.calls += 1
+
+                if self.calls == 1:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'list_files',
+                                'arguments': {}
+                            }
+                        }]
+                    }
+
+                return {
+                    'content': 'Diagnosis completed.'
+                }
+
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            Provider()
+        )
+
+        self.assertEqual(agent.status, 'COMPLETED')
+        self.assertEqual(agent.termination_reason, 'final_answer')
+        self.assertEqual(agent.steps, 2)
+        self.assertEqual(agent.tool_calls, 1)
+
+
+    def test_repeated_tool_call_is_blocked(self):
+        class Provider:
+            def chat(self, messages, tools):
+                return {
+                    'content': '',
+                    'tool_calls': [{
+                        'function': {
+                            'name': 'list_files',
+                            'arguments': {}
+                        }
+                    }]
+                }
+
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            Provider(),
+            max_steps=10
+        )
+
+        self.assertEqual(agent.status, 'BLOCKED')
+        self.assertEqual(
+            agent.termination_reason,
+            'repeated_tool_call'
+        )
+        self.assertEqual(agent.tool_calls, 3)
+
+
+    def test_empty_final_response_is_blocked(self):
+        class Provider:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, messages, tools):
+                self.calls += 1
+
+                if self.calls == 1:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'list_files',
+                                'arguments': {}
+                            }
+                        }]
+                    }
+
+                return {
+                    'content': ''
+                }
+
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            Provider()
+        )
+
+        self.assertEqual(agent.status, 'BLOCKED')
+        self.assertEqual(
+            agent.termination_reason,
+            'empty_final_response'
+        )
+
+
+    def test_provider_error_is_failed(self):
+        class Provider:
+            def chat(self, messages, tools):
+                raise RuntimeError('provider unavailable')
+
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            Provider()
+        )
+
+        self.assertEqual(agent.status, 'FAILED')
+        self.assertEqual(
+            agent.termination_reason,
+            'provider_error'
+        )
 
 
 class ProviderTest(unittest.TestCase):

@@ -146,6 +146,9 @@ def main(argv=None) -> int:
         p.exit(2, f'ERROR: {exc}\n')
 
     print(f'Provider: {args.provider}; model: {args.model if args.provider == "ollama" else "none (mock)"}')
+    print(f'Status: {result.status}')
+    print(f'Reason: {result.termination_reason}')
+    print(f'Steps: {result.steps}')
     print(f'Tool calls: {len(result.events)}')
 
     for event in result.events:
@@ -154,4 +157,7 @@ def main(argv=None) -> int:
     print(f'Report: {args.report.resolve()}\n')
     print(result.report)
 
-    return 0
+    if result.status == 'COMPLETED':
+        return 0
+
+    return 2
