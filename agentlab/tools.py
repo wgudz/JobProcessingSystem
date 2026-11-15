@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 import time
 import json
+import re
 
 TOOLS = [
     (
@@ -69,6 +70,21 @@ TOOLS = [
         {}
     ),
     (
+        'git_status',
+        'Read current branch, HEAD and working tree status.',
+        {}
+    ),
+    (
+        'git_show',
+        'Read source diff for one exact commit SHA.',
+        {
+            'commit': {
+                'type': 'string',
+                'description': 'Full 40-character Git commit SHA.'
+            }
+        }
+    ),
+    (
         'git_log',
         'Inspect recent local commit summaries.',
         {}
@@ -110,6 +126,8 @@ TOOL_SCHEMAS = [
                     if name == 'read_file'
                     else {'required': ['query']}
                     if name == 'search_code'
+                    else {'required': ['commit']}
+                    if name == 'git_show'
                     else {}
                 ),
                 'additionalProperties': False
@@ -151,6 +169,16 @@ SEARCH_EXTENSIONS = {
 
 MAX_SEARCH_FILE_SIZE = 250_000
 SEARCH_TIMEOUT = 2.0
+
+GIT_PATHS = [
+    'src',
+    'include',
+    'tests',
+    'app',
+    'CMakeLists.txt'
+]
+
+COMMIT_RE = re.compile(r'^[0-9a-fA-F]{40}$')
 
 def validate_tool_result(result: dict) -> bool:
     return isinstance(result, dict) and RESULT_FIELDS <= result.keys()
@@ -456,6 +484,195 @@ class ToolExecutor:
             truncated=truncated
         )
 
+    def git_status(self, arguments: dict) -> dict[str, Any]:
+        start = time.perf_counter()
+
+        branch = self.run_cmd(
+            ['git', 'branch', '--show-current'],
+            10,
+            'git_status',
+            arguments
+        )
+
+        if branch['status'] != 'OK':
+            return branch
+
+        head = self.run_cmd(
+            ['git', 'rev-parse', 'HEAD'],
+            10,
+            'git_status',
+            arguments
+        )
+
+        if head['status'] != 'OK':
+            return head
+
+        status = self.run_cmd(
+            [
+                'git',
+                'status',
+                '--porcelain=v1',
+                '--untracked-files=all'
+            ],
+            10,
+            'git_status',
+            arguments
+        )
+
+        if status['status'] != 'OK':
+            return status
+
+        changes = []
+
+        for line in status['stdout'].splitlines():
+            if len(line) < 3:
+                continue
+
+            changes.append({
+                'index': line[0],
+                'worktree': line[1],
+                'path': line[3:]
+            })
+
+        data = {
+            'branch': branch['stdout'].strip() or '(detached)',
+            'head': head['stdout'].strip(),
+            'working_tree': changes
+        }
+
+        return make_tool_result(
+            'git_status',
+            arguments,
+            'OK',
+            stdout=json.dumps(
+                data,
+                ensure_ascii=False
+            ),
+            duration_ms=int(
+                (time.perf_counter() - start) * 1000
+            ),
+            truncated=status['truncated']
+        )
+
+
+    def git_show(self, arguments: dict) -> dict[str, Any]:
+        start = time.perf_counter()
+
+        commit = arguments.get('commit')
+
+        if (
+            not isinstance(commit, str)
+            or not COMMIT_RE.fullmatch(commit)
+        ):
+            return make_tool_result(
+                'git_show',
+                arguments,
+                'INVALID_ARGUMENTS',
+                error='commit must be a full 40-character SHA'
+            )
+
+        exists = self.run_cmd(
+            [
+                'git',
+                'cat-file',
+                '-e',
+                commit + '^{commit}'
+            ],
+            10,
+            'git_show',
+            arguments
+        )
+
+        if exists['status'] != 'OK':
+            return make_tool_result(
+                'git_show',
+                arguments,
+                'INVALID_ARGUMENTS',
+                error='Unknown commit'
+            )
+
+        ancestor = self.run_cmd(
+            [
+                'git',
+                'merge-base',
+                '--is-ancestor',
+                commit,
+                'HEAD'
+            ],
+            10,
+            'git_show',
+            arguments
+        )
+
+        if ancestor['exit_code'] != 0:
+            return make_tool_result(
+                'git_show',
+                arguments,
+                'INVALID_ARGUMENTS',
+                error='Commit is outside current HEAD history'
+            )
+
+        parents = self.run_cmd(
+            [
+                'git',
+                'rev-list',
+                '--parents',
+                '-n',
+                '1',
+                commit
+            ],
+            10,
+            'git_show',
+            arguments
+        )
+
+        if parents['status'] != 'OK':
+            return parents
+
+        parts = parents['stdout'].strip().split()
+
+        base = parts[1] if len(parts) > 1 else None
+
+        diff = self.run_cmd(
+            [
+                'git',
+                'show',
+                '--format=',
+                '--no-ext-diff',
+                '--no-renames',
+                commit,
+                '--',
+                *GIT_PATHS
+            ],
+            20,
+            'git_show',
+            arguments
+        )
+
+        if diff['status'] != 'OK':
+            return diff
+
+        data = {
+            'commit': commit,
+            'base': base,
+            'scope': GIT_PATHS,
+            'diff': diff['stdout']
+        }
+
+        return make_tool_result(
+            'git_show',
+            arguments,
+            'OK',
+            stdout=json.dumps(
+                data,
+                ensure_ascii=False
+            ),
+            duration_ms=int(
+                (time.perf_counter() - start) * 1000
+            ),
+            truncated=diff['truncated']
+        )
+
     def execute(
         self,
         name: str,
@@ -573,6 +790,12 @@ class ToolExecutor:
 
             if name == 'search_code':
                 return self.search_code(args)
+
+            if name == 'git_status':
+                return self.git_status(args)
+
+            if name == 'git_show':
+                return self.git_show(args)
 
             if name == 'git_diff':
                 return self.run_cmd(

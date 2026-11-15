@@ -238,7 +238,13 @@ class SafeToolsTest(BaseCase):
     def test_schema_contains_expected_tools(self):
         names = [item['function']['name'] for item in TOOL_SCHEMAS]
         self.assertEqual(len(names), len(set(names)))
-        for name in ('read_file', 'run_ctest', 'git_diff'):
+        for name in (
+            'read_file',
+            'run_ctest',
+            'git_diff',
+            'git_status',
+            'git_show'
+        ):
             self.assertIn(name, names)
 
     def test_normalized_command_success(self):
@@ -401,6 +407,207 @@ class SafeToolsTest(BaseCase):
         self.assertEqual(data['count'], 2)
         self.assertTrue(result['truncated'])
 
+class GitToolsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+        self.ws = Path(self.tmp.name)
+
+        (self.ws / 'src').mkdir()
+
+        (self.ws / 'CMakeLists.txt').write_text(
+            'cmake_minimum_required(VERSION 3.20)\n',
+            encoding='utf-8'
+        )
+
+        (self.ws / 'src/example.cpp').write_text(
+            'int value = 1;\n',
+            encoding='utf-8'
+        )
+
+        subprocess.run(
+            ['git', 'init'],
+            cwd=self.ws,
+            check=True,
+            capture_output=True
+        )
+
+        subprocess.run(
+            [
+                'git',
+                'config',
+                'user.email',
+                'test@example.com'
+            ],
+            cwd=self.ws,
+            check=True
+        )
+
+        subprocess.run(
+            [
+                'git',
+                'config',
+                'user.name',
+                'Test User'
+            ],
+            cwd=self.ws,
+            check=True
+        )
+
+        subprocess.run(
+            ['git', 'add', '.'],
+            cwd=self.ws,
+            check=True
+        )
+
+        subprocess.run(
+            [
+                'git',
+                'commit',
+                '-m',
+                'initial'
+            ],
+            cwd=self.ws,
+            check=True,
+            capture_output=True
+        )
+
+        self.executor = ToolExecutor(self.ws)
+
+    def git(self, *args):
+        return subprocess.run(
+            ['git', *args],
+            cwd=self.ws,
+            check=True,
+            capture_output=True,
+            text=True
+        ).stdout.strip()
+
+    def test_git_status_clean_head(self):
+        result = self.executor.execute(
+            'git_status',
+            {}
+        )
+
+        data = json.loads(result['stdout'])
+
+        self.assertEqual(result['status'], 'OK')
+        self.assertEqual(
+            data['head'],
+            self.git('rev-parse', 'HEAD')
+        )
+        self.assertEqual(
+            data['working_tree'],
+            []
+        )
+
+    def test_git_status_uncommitted_change(self):
+        (self.ws / 'src/example.cpp').write_text(
+            'int value = 2;\n',
+            encoding='utf-8'
+        )
+
+        result = self.executor.execute(
+            'git_status',
+            {}
+        )
+
+        data = json.loads(result['stdout'])
+
+        self.assertEqual(
+            data['working_tree'][0]['worktree'],
+            'M'
+        )
+        self.assertEqual(
+            data['working_tree'][0]['path'],
+            'src/example.cpp'
+        )
+
+    def test_git_status_staged_change(self):
+        (self.ws / 'src/example.cpp').write_text(
+            'int value = 2;\n',
+            encoding='utf-8'
+        )
+
+        self.git('add', 'src/example.cpp')
+
+        result = self.executor.execute(
+            'git_status',
+            {}
+        )
+
+        data = json.loads(result['stdout'])
+
+        self.assertEqual(
+            data['working_tree'][0]['index'],
+            'M'
+        )
+        self.assertEqual(
+            data['working_tree'][0]['worktree'],
+            ' '
+        )
+
+    def test_git_show_new_commit(self):
+        old_head = self.git(
+            'rev-parse',
+            'HEAD'
+        )
+
+        (self.ws / 'src/example.cpp').write_text(
+            'int value = 2;\n',
+            encoding='utf-8'
+        )
+
+        self.git('add', 'src/example.cpp')
+        self.git('commit', '-m', 'change value')
+
+        new_head = self.git(
+            'rev-parse',
+            'HEAD'
+        )
+
+        result = self.executor.execute(
+            'git_show',
+            {
+                'commit': new_head
+            }
+        )
+
+        data = json.loads(result['stdout'])
+
+        self.assertEqual(result['status'], 'OK')
+        self.assertEqual(data['commit'], new_head)
+        self.assertEqual(data['base'], old_head)
+        self.assertIn(
+            'src/example.cpp',
+            data['diff']
+        )
+
+    def test_git_show_rejects_invalid_reference(self):
+        result = self.executor.execute(
+            'git_show',
+            {
+                'commit': '--stat'
+            }
+        )
+
+        self.assertEqual(
+            result['status'],
+            'INVALID_ARGUMENTS'
+        )
+
+        result = self.executor.execute(
+            'git_show',
+            {
+                'commit': '0' * 40
+            }
+        )
+
+        self.assertEqual(
+            result['status'],
+            'INVALID_ARGUMENTS'
+        )
 
 class SkillTest(unittest.TestCase):
     def test_skill_loaded(self):
