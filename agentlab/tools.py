@@ -7,23 +7,119 @@ import time
 import json
 
 TOOLS = [
- ('list_files', 'List C++ sources, application, tests and CMake files.', {}),
- ('read_file', 'Read one allowlisted project file by relative path.', {'path': {'type': 'string', 'description': 'E.g. include/job_system/thread_safe_queue.h'}}),
- ('git_diff', 'Read unstaged Git source diff. Changes may be uncommitted.', {}),
- ('git_log', 'Inspect recent local commit summaries.', {}),
- ('run_cmake_configure', 'Configure CMake in build/ (requires --allow-exec).', {}),
- ('run_cmake_build', 'Build the project (requires --allow-exec).', {}),
- ('run_ctest', 'Run CTest with failure output (requires --allow-exec).', {}),
- ('list_ctest', 'List registered CTest tests (requires --allow-exec).', {}),
+    (
+        'list_files',
+        'List C++ sources, application, tests and CMake files.',
+        {}
+    ),
+    (
+        'read_file',
+        'Read one allowlisted project file by relative path.',
+        {
+            'path': {
+                'type': 'string',
+                'description': (
+                    'E.g. include/job_system/thread_safe_queue.h'
+                )
+            }
+        }
+    ),
+    (
+        'search_code',
+        'Search C++ source code for a symbol or phrase without returning entire files.',
+        {
+            'query': {
+                'type': 'string',
+                'description': 'Symbol or phrase to search for.'
+            },
+            'extensions': {
+                'type': 'array',
+                'items': {
+                    'type': 'string'
+                },
+                'description': (
+                    'Optional allowed file extensions, e.g. .cpp, .h.'
+                )
+            },
+            'max_files': {
+                'type': 'integer',
+                'description': 'Maximum number of files to scan.'
+            },
+            'max_matches': {
+                'type': 'integer',
+                'description': 'Maximum number of matches to return.'
+            },
+            'directory': {
+                'type': 'string',
+                'enum': [
+                    'src',
+                    'include',
+                    'tests',
+                    'app'
+                ],
+                'description': (
+                    'Optional allowlisted directory to search.'
+                )
+            }
+        }
+    ),
+    (
+        'git_diff',
+        'Read unstaged Git source diff. Changes may be uncommitted.',
+        {}
+    ),
+    (
+        'git_log',
+        'Inspect recent local commit summaries.',
+        {}
+    ),
+    (
+        'run_cmake_configure',
+        'Configure CMake in build/ (requires --allow-exec).',
+        {}
+    ),
+    (
+        'run_cmake_build',
+        'Build the project (requires --allow-exec).',
+        {}
+    ),
+    (
+        'run_ctest',
+        'Run CTest with failure output (requires --allow-exec).',
+        {}
+    ),
+    (
+        'list_ctest',
+        'List registered CTest tests (requires --allow-exec).',
+        {}
+    ),
 ]
+
+
 TOOL_SCHEMAS = [
- {'type': 'function', 'function': {
-     'name': name, 'description': description,
-     'parameters': {'type': 'object', 'properties': properties,
-                    **({'required': ['path']} if name == 'read_file' else {}),
-                    'additionalProperties': False}}}
- for name, description, properties in TOOLS
+    {
+        'type': 'function',
+        'function': {
+            'name': name,
+            'description': description,
+            'parameters': {
+                'type': 'object',
+                'properties': properties,
+                **(
+                    {'required': ['path']}
+                    if name == 'read_file'
+                    else {'required': ['query']}
+                    if name == 'search_code'
+                    else {}
+                ),
+                'additionalProperties': False
+            }
+        }
+    }
+    for name, description, properties in TOOLS
 ]
+
+
 ALLOWED_TOOLS = {item[0] for item in TOOLS}
 SOURCE_DIRS = {'src', 'include', 'tests', 'app'}
 TOP_FILES = {'CMakeLists.txt', 'README.md', 'Jenkinsfile.ai'}
@@ -43,6 +139,18 @@ RESULT_FIELDS = {
     'error'
 }
 
+SEARCH_DIRS = ('src', 'include', 'tests', 'app')
+
+SEARCH_EXTENSIONS = {
+    '.cpp',
+    '.h',
+    '.hpp',
+    '.cc',
+    '.cxx'
+}
+
+MAX_SEARCH_FILE_SIZE = 250_000
+SEARCH_TIMEOUT = 2.0
 
 def validate_tool_result(result: dict) -> bool:
     return isinstance(result, dict) and RESULT_FIELDS <= result.keys()
@@ -174,6 +282,180 @@ class ToolExecutor:
                 error=f'Timeout after {timeout}s'
             )
 
+    def search_code(self, arguments: dict) -> dict[str, Any]:
+        start = time.perf_counter()
+
+        query = arguments.get('query')
+        extensions = arguments.get(
+            'extensions',
+            sorted(SEARCH_EXTENSIONS)
+        )
+        max_files = arguments.get('max_files', 30)
+        max_matches = arguments.get('max_matches', 20)
+        directory = arguments.get('directory')
+
+        if not isinstance(query, str) or not query.strip():
+            return make_tool_result(
+                'search_code',
+                arguments,
+                'INVALID_ARGUMENTS',
+                error='query must be a non-empty string'
+            )
+
+        if directory is not None and directory not in SEARCH_DIRS:
+            return make_tool_result(
+                'search_code',
+                arguments,
+                'INVALID_ARGUMENTS',
+                error='directory is outside search allowlist'
+            )
+
+        if not isinstance(extensions, list):
+            return make_tool_result(
+                'search_code',
+                arguments,
+                'INVALID_ARGUMENTS',
+                error='extensions must be a list'
+            )
+
+        normalized_extensions = set()
+
+        for extension in extensions:
+            if not isinstance(extension, str):
+                return make_tool_result(
+                    'search_code',
+                    arguments,
+                    'INVALID_ARGUMENTS',
+                    error='invalid extension'
+                )
+
+            if not extension.startswith('.'):
+                extension = '.' + extension
+
+            normalized_extensions.add(
+                extension.lower()
+            )
+
+        if not normalized_extensions <= SEARCH_EXTENSIONS:
+            return make_tool_result(
+                'search_code',
+                arguments,
+                'INVALID_ARGUMENTS',
+                error='extension is not allowed'
+            )
+
+        if (
+            not isinstance(max_files, int)
+            or not 1 <= max_files <= 100
+            or not isinstance(max_matches, int)
+            or not 1 <= max_matches <= 50
+        ):
+            return make_tool_result(
+                'search_code',
+                arguments,
+                'INVALID_ARGUMENTS',
+                error='invalid search limits'
+            )
+
+        if directory:
+            roots = [self.workspace / directory]
+        else:
+            roots = [
+                self.workspace / name
+                for name in SEARCH_DIRS
+            ]
+
+        files = []
+
+        for root in roots:
+            if not root.is_dir():
+                continue
+
+            for path in root.rglob('*'):
+                if not path.is_file():
+                    continue
+
+                if path.suffix.lower() not in normalized_extensions:
+                    continue
+
+                if any(
+                    part in {'.git', 'build', '__pycache__'}
+                    for part in path.parts
+                ):
+                    continue
+
+                files.append(path)
+
+        files.sort(
+            key=lambda path: str(path.relative_to(self.workspace))
+        )
+
+        matches = []
+        scanned_files = 0
+        truncated = False
+
+        for path in files:
+            if scanned_files >= max_files:
+                truncated = True
+                break
+
+            if time.perf_counter() - start > SEARCH_TIMEOUT:
+                truncated = True
+                break
+
+            if path.stat().st_size > MAX_SEARCH_FILE_SIZE:
+                continue
+
+            scanned_files += 1
+
+            text = path.read_text(
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            lines = text.splitlines()
+
+            for index, line in enumerate(lines):
+                if query not in line:
+                    continue
+
+                context = line.strip()[:250]
+
+                matches.append({
+                    'path': str(
+                        path.relative_to(self.workspace)
+                    ).replace('\\', '/'),
+                    'line': index + 1,
+                    'context': context
+                })
+
+                if len(matches) >= max_matches:
+                    truncated = True
+                    break
+
+            if len(matches) >= max_matches:
+                break
+
+        output = {
+            'query': query,
+            'matches': matches,
+            'count': len(matches)
+        }
+
+        return make_tool_result(
+            'search_code',
+            arguments,
+            'OK',
+            stdout=json.dumps(
+                output,
+                ensure_ascii=False
+            ),
+            duration_ms=int(
+                (time.perf_counter() - start) * 1000
+            ),
+            truncated=truncated
+        )
+
     def execute(
         self,
         name: str,
@@ -288,6 +570,9 @@ class ToolExecutor:
                 result['content'] = content
 
                 return result
+
+            if name == 'search_code':
+                return self.search_code(args)
 
             if name == 'git_diff':
                 return self.run_cmd(

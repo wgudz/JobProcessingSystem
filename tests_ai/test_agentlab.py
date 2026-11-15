@@ -146,6 +146,56 @@ class CliTest(BaseCase):
             stderr.getvalue()
     )
 
+    def test_search_code_through_cli(self):
+        path = self.ws / 'src/example.cpp'
+
+        path.write_text(
+            'void waitAndPop();\n',
+            encoding='utf-8'
+        )
+
+        class SearchProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, messages, tools):
+                self.calls += 1
+
+                if self.calls == 1:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'search_code',
+                                'arguments': {
+                                    'query': 'waitAndPop'
+                                }
+                            }
+                        }]
+                    }
+
+                return {
+                    'content': 'Search completed.'
+                }
+
+        report = self.ws / 'search-report.md'
+
+        with patch(
+            'agentlab.cli.MockProvider',
+            return_value=SearchProvider()
+        ):
+            result = main([
+                '--provider', 'mock',
+                '--workspace', str(self.ws),
+                '--report', str(report)
+            ])
+
+        self.assertEqual(result, 0)
+        self.assertIn(
+            'search_code',
+            report.read_text(encoding='utf-8')
+        )
+
 class SafeToolsTest(BaseCase):
     def test_list_files_works(self):
         paths = ToolExecutor(self.ws).execute('list_files', {})['files']
@@ -243,6 +293,114 @@ class SafeToolsTest(BaseCase):
         self.assertTrue(validate_tool_result(result))
         self.assertEqual(result['status'], 'TIMEOUT')
         self.assertEqual(result['exit_code'], 124)
+
+    def test_search_code_mark_statistics_recorded(self):
+        path = self.ws / 'src/statistics.cpp'
+
+        path.write_text(
+            'bool markStatisticsRecorded();\n',
+            encoding='utf-8'
+        )
+
+        result = ToolExecutor(self.ws).execute(
+            'search_code',
+            {
+                'query': 'markStatisticsRecorded'
+            }
+        )
+
+        self.assertEqual(result['status'], 'OK')
+
+        data = json.loads(result['stdout'])
+
+        self.assertEqual(data['count'], 1)
+        self.assertEqual(
+            data['matches'][0]['path'],
+            'src/statistics.cpp'
+        )
+
+
+    def test_search_code_wait_and_pop(self):
+        path = (
+            self.ws
+            / 'include/job_system/thread_safe_queue.h'
+        )
+
+        path.write_text(
+            'std::optional<T> waitAndPop();\n',
+            encoding='utf-8'
+        )
+
+        result = ToolExecutor(self.ws).execute(
+            'search_code',
+            {
+                'query': 'waitAndPop'
+            }
+        )
+
+        data = json.loads(result['stdout'])
+
+        self.assertEqual(data['count'], 1)
+        self.assertEqual(
+            data['matches'][0]['line'],
+            1
+        )
+
+
+    def test_search_code_no_match(self):
+        result = ToolExecutor(self.ws).execute(
+            'search_code',
+            {
+                'query': 'DefinitelyFakeSymbol123'
+            }
+        )
+
+        data = json.loads(result['stdout'])
+
+        self.assertEqual(result['status'], 'OK')
+        self.assertEqual(data['count'], 0)
+        self.assertEqual(data['matches'], [])
+
+
+    def test_search_code_rejects_outside_directory(self):
+        result = ToolExecutor(self.ws).execute(
+            'search_code',
+            {
+                'query': 'test',
+                'directory': '../'
+            }
+        )
+
+        self.assertEqual(
+            result['status'],
+            'INVALID_ARGUMENTS'
+        )
+
+
+    def test_search_code_limits_matches(self):
+        path = self.ws / 'src/many.cpp'
+
+        path.write_text(
+            'return 1;\n'
+            'return 2;\n'
+            'return 3;\n'
+            'return 4;\n',
+            encoding='utf-8'
+        )
+
+        result = ToolExecutor(self.ws).execute(
+            'search_code',
+            {
+                'query': 'return',
+                'max_matches': 2
+            }
+        )
+
+        data = json.loads(result['stdout'])
+
+        self.assertEqual(data['count'], 2)
+        self.assertTrue(result['truncated'])
+
 
 class SkillTest(unittest.TestCase):
     def test_skill_loaded(self):
