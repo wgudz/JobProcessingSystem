@@ -224,22 +224,19 @@ def run_agent(
                 'result': result
             })
 
-            error = result.get('error')
+            result_status = result['status']
 
-            # Niedozwolone / niepoprawne narzędzie
-            if error and 'Execution denied' not in str(error):
-                reason = (
-                    'ctest_error'
-                    if name == 'run_ctest'
-                    else 'tool_validation_error'
-                )
-
+            if result_status in (
+                'INVALID_ARGUMENTS',
+                'NOT_FOUND',
+                'TIMEOUT'
+            ):
                 return make_result(
-                    str(error),
+                    result['error'],
                     evidence,
                     provider,
                     BLOCKED,
-                    reason,
+                    'tool_error',
                     steps,
                     tool_calls
                 )
@@ -249,7 +246,11 @@ def run_agent(
                 {
                     'name': name,
                     'args': args,
-                    'result': result
+                    'status': result['status'],
+                    'exit_code': result['exit_code'],
+                    'stdout': result['stdout'],
+                    'stderr': result['stderr'],
+                    'error': result['error']
                 },
                 sort_keys=True,
                 default=str
@@ -272,11 +273,20 @@ def run_agent(
                     tool_calls
                 )
 
+            model_result = {
+                'tool': result['tool'],
+                'status': result['status'],
+                'exit_code': result['exit_code'],
+                'stdout': result['stdout'],
+                'stderr': result['stderr'],
+                'error': result['error']
+            }
+
             messages.append({
                 'role': 'tool',
                 'tool_name': name,
                 'content': json.dumps(
-                    result,
+                    model_result,
                     ensure_ascii=False
                 )[:19000]
             })

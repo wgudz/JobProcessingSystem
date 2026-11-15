@@ -9,10 +9,16 @@ from unittest.mock import patch
 from agentlab.providers import MockProvider, OllamaProvider
 from agentlab.runner import run_agent, save_report
 from agentlab.skill_loader import load_skill
-from agentlab.tools import ToolExecutor, TOOL_SCHEMAS
+from agentlab.tools import (
+    ToolExecutor,
+    TOOL_SCHEMAS,
+    validate_tool_result
+)
 from agentlab.cli import main
 
 from urllib.error import HTTPError
+
+import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -185,6 +191,58 @@ class SafeToolsTest(BaseCase):
         for name in ('read_file', 'run_ctest', 'git_diff'):
             self.assertIn(name, names)
 
+    def test_normalized_command_success(self):
+        result = ToolExecutor(self.ws).run_cmd(
+            ['cmake', '-E', 'true'],
+            5
+        )
+
+        self.assertTrue(validate_tool_result(result))
+        self.assertEqual(result['status'], 'OK')
+        self.assertEqual(result['exit_code'], 0)
+
+
+    def test_normalized_command_failure(self):
+        result = ToolExecutor(self.ws).run_cmd(
+            ['cmake', '-E', 'false'],
+            5
+        )
+
+        self.assertTrue(validate_tool_result(result))
+        self.assertEqual(
+            result['status'],
+            'COMMAND_FAILED'
+        )
+        self.assertEqual(result['exit_code'], 1)
+
+
+    def test_normalized_command_not_found(self):
+        result = ToolExecutor(self.ws).run_cmd(
+            ['definitely-no-such-command-123456'],
+            5
+        )
+
+        self.assertTrue(validate_tool_result(result))
+        self.assertEqual(result['status'], 'NOT_FOUND')
+        self.assertEqual(result['exit_code'], 127)
+
+
+    def test_normalized_command_timeout(self):
+        with patch(
+            'agentlab.tools.subprocess.run',
+            side_effect=subprocess.TimeoutExpired(
+                ['fake'],
+                1
+            )
+        ):
+            result = ToolExecutor(self.ws).run_cmd(
+                ['fake'],
+                1
+            )
+
+        self.assertTrue(validate_tool_result(result))
+        self.assertEqual(result['status'], 'TIMEOUT')
+        self.assertEqual(result['exit_code'], 124)
 
 class SkillTest(unittest.TestCase):
     def test_skill_loaded(self):
