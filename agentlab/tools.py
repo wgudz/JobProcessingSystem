@@ -101,13 +101,26 @@ TOOLS = [
     ),
     (
         'run_ctest',
-        'Run CTest with failure output (requires --allow-exec).',
+        'Run full CTest with failure output (requires --allow-exec).',
         {}
     ),
     (
         'list_ctest',
-        'List registered CTest tests (requires --allow-exec).',
+        'List registered CTest tests and detected build configuration.',
         {}
+    ),
+    (
+        'run_selected_tests',
+        'Run only selected registered CTest tests (requires --allow-exec).',
+        {
+            'tests': {
+                'type': 'array',
+                'items': {
+                    'type': 'string'
+                },
+                'description': 'Registered CTest test names.'
+            }
+        }
     ),
 ]
 
@@ -128,6 +141,8 @@ TOOL_SCHEMAS = [
                     if name == 'search_code'
                     else {'required': ['commit']}
                     if name == 'git_show'
+                    else {'required': ['tests']}
+                    if name == 'run_selected_tests' 
                     else {}
                 ),
                 'additionalProperties': False
@@ -144,6 +159,10 @@ TOP_FILES = {'CMakeLists.txt', 'README.md', 'Jenkinsfile.ai'}
 ALLOWED_SUFFIXES = {'.cpp', '.cc', '.c', '.h', '.hpp', '.hxx', '.txt', '.cmake', '.md'}
 MAX_READ = 17000
 MAX_OUTPUT = 11000
+
+SELECTED_TEST_TIMEOUT = 60
+FULL_CTEST_TIMEOUT = 150
+MAX_SELECTED_TESTS = 10
 
 RESULT_FIELDS = {
     'tool',
@@ -673,6 +692,249 @@ class ToolExecutor:
             truncated=diff['truncated']
         )
 
+    def detect_build_config(self):
+        build = self.workspace / 'build'
+        cache = build / 'CMakeCache.txt'
+
+        if not build.is_dir() or not cache.is_file():
+            return None
+
+        text = cache.read_text(
+            encoding='utf-8',
+            errors='replace'
+        )
+
+        for line in text.splitlines():
+            if line.startswith('CMAKE_BUILD_TYPE:STRING='):
+                value = line.split('=', 1)[1].strip()
+
+                if value:
+                    return value
+
+        for line in text.splitlines():
+            if line.startswith('CMAKE_CONFIGURATION_TYPES:STRING='):
+                configs = line.split('=', 1)[1].split(';')
+
+                if 'Debug' in configs:
+                    return 'Debug'
+
+                if configs:
+                    return configs[0]
+
+        return ''
+
+
+    def list_ctest(self, arguments: dict) -> dict[str, Any]:
+        start = time.perf_counter()
+
+        build = self.workspace / 'build'
+
+        if not build.is_dir():
+            return make_tool_result(
+                'list_ctest',
+                arguments,
+                'NOT_FOUND',
+                error='Build directory not found'
+            )
+
+        config = self.detect_build_config()
+
+        if config is None:
+            return make_tool_result(
+                'list_ctest',
+                arguments,
+                'NOT_FOUND',
+                error='Build configuration not found'
+            )
+
+        command = [
+            'ctest',
+            '--test-dir',
+            str(build)
+        ]
+
+        if config:
+            command += [
+                '-C',
+                config
+            ]
+
+        command.append('-N')
+
+        result = self.run_cmd(
+            command,
+            30,
+            'list_ctest',
+            arguments
+        )
+
+        if result['status'] != 'OK':
+            return result
+
+        tests = []
+
+        for line in result['stdout'].splitlines():
+            match = re.search(
+                r'Test\s+#\d+:\s+(.+)$',
+                line
+            )
+
+            if match:
+                tests.append(
+                    match.group(1).strip()
+                )
+
+        data = {
+            'build_dir': 'build',
+            'configuration': config or 'single-config',
+            'tests': tests
+        }
+
+        result['stdout'] = json.dumps(
+            data,
+            ensure_ascii=False
+        )
+
+        return result
+
+
+    def run_selected_tests(
+        self,
+        arguments: dict
+    ) -> dict[str, Any]:
+
+        start = time.perf_counter()
+
+        requested = arguments.get('tests')
+
+        if (
+            not isinstance(requested, list)
+            or not requested
+            or len(requested) > MAX_SELECTED_TESTS
+            or not all(
+                isinstance(name, str) and name
+                for name in requested
+            )
+        ):
+            return make_tool_result(
+                'run_selected_tests',
+                arguments,
+                'INVALID_ARGUMENTS',
+                error='tests must be a non-empty list of test names'
+            )
+
+        listed = self.list_ctest({})
+
+        if listed['status'] != 'OK':
+            return make_tool_result(
+                'run_selected_tests',
+                arguments,
+                listed['status'],
+                exit_code=listed['exit_code'],
+                stderr=listed['stderr'],
+                error=listed['error']
+            )
+
+        data = json.loads(
+            listed['stdout']
+        )
+
+        available = set(
+            data['tests']
+        )
+
+        for name in requested:
+            if name not in available:
+                return make_tool_result(
+                    'run_selected_tests',
+                    arguments,
+                    'INVALID_ARGUMENTS',
+                    error='Unknown CTest test: ' + name
+                )
+
+        build = str(
+            self.workspace / 'build'
+        )
+
+        config = data['configuration']
+
+        all_stdout = []
+        all_stderr = []
+        final_status = 'OK'
+        final_exit_code = 0
+        truncated = False
+
+        for name in requested:
+            command = [
+                'ctest',
+                '--test-dir',
+                build
+            ]
+
+            if config != 'single-config':
+                command += [
+                    '-C',
+                    config
+                ]
+
+            command += [
+                '--output-on-failure',
+                '-R',
+                '^' + re.escape(name) + '$'
+            ]
+
+            result = self.run_cmd(
+                command,
+                SELECTED_TEST_TIMEOUT,
+                'run_selected_tests',
+                {'tests': [name]}
+            )
+
+            all_stdout.append(
+                result['stdout']
+            )
+
+            all_stderr.append(
+                result['stderr']
+            )
+
+            truncated = (
+                truncated
+                or result['truncated']
+            )
+
+            if result['status'] == 'TIMEOUT':
+                return make_tool_result(
+                    'run_selected_tests',
+                    arguments,
+                    'TIMEOUT',
+                    exit_code=124,
+                    stdout='\n'.join(all_stdout),
+                    stderr='\n'.join(all_stderr),
+                    duration_ms=int(
+                        (time.perf_counter() - start) * 1000
+                    ),
+                    truncated=truncated,
+                    error='Selected CTest timed out'
+                )
+
+            if result['status'] != 'OK':
+                final_status = result['status']
+                final_exit_code = result['exit_code']
+
+        return make_tool_result(
+            'run_selected_tests',
+            arguments,
+            final_status,
+            exit_code=final_exit_code,
+            stdout='\n'.join(all_stdout),
+            stderr='\n'.join(all_stderr),
+            duration_ms=int(
+                (time.perf_counter() - start) * 1000
+            ),
+            truncated=truncated
+        )
+
     def execute(
         self,
         name: str,
@@ -843,6 +1105,11 @@ class ToolExecutor:
                         '--allow-exec for trusted code'
                     )
                 )
+            if name == 'list_ctest':
+                return self.list_ctest(args)
+
+            if name == 'run_selected_tests':
+                return self.run_selected_tests(args)
 
             build = str(
                 self.workspace / 'build'
@@ -880,18 +1147,7 @@ class ToolExecutor:
                         'Debug',
                         '--output-on-failure'
                     ],
-                    150
-                ),
-                'list_ctest': (
-                    [
-                        'ctest',
-                        '--test-dir',
-                        build,
-                        '-C',
-                        'Debug',
-                        '-N'
-                    ],
-                    30
+                    FULL_CTEST_TIMEOUT
                 )
             }
 

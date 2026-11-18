@@ -77,6 +77,16 @@ def run_agent(
 
     load_skill(project_root / 'skills', skill_name)
 
+    test_map = json.loads(
+        (
+            project_root
+            / 'agentlab'
+            / 'test_map.json'
+        ).read_text(
+            encoding='utf-8'
+        )
+    )
+    
     executor = ToolExecutor(
         workspace,
         allow_exec=allow_exec
@@ -101,6 +111,13 @@ def run_agent(
                 + issue_text
                 + '\nInspect build/tests if allowed, inspect source and Git diff, '
                 'propose a minimal patch without applying it, and write a verifiable report.'
+                'Use this filename-fragment to CTest mapping when selecting diagnostic tests:\n'
+                + json.dumps(
+                    test_map,
+                    ensure_ascii=False
+                )
+                + '\nSelective tests are diagnostic only. '
+                'After a C++ fix, full run_ctest is required before claiming final verification.'
             )
         }
     ]

@@ -12,7 +12,8 @@ from agentlab.skill_loader import load_skill
 from agentlab.tools import (
     ToolExecutor,
     TOOL_SCHEMAS,
-    validate_tool_result
+    validate_tool_result,
+    make_tool_result
 )
 from agentlab.cli import main
 
@@ -965,5 +966,192 @@ class ProviderTest(unittest.TestCase):
             ):
                 OllamaProvider('qwen3:4b').chat([], [])
 
+class CTestSelectionTest(BaseCase):
+    def setUp(self):
+        super().setUp()
+
+        self.executor = ToolExecutor(
+            self.ws,
+            allow_exec=True
+        )
+
+    def listed_tests(self):
+        return make_tool_result(
+            'list_ctest',
+            {},
+            'OK',
+            exit_code=0,
+            stdout=json.dumps({
+                'build_dir': 'build',
+                'configuration': 'Debug',
+                'tests': [
+                    'thread_safe_queue_test',
+                    'statistics_test',
+                    'worker_pool_test'
+                ]
+            })
+        )
+
+    def test_known_selected_test(self):
+        with patch.object(
+            self.executor,
+            'list_ctest',
+            return_value=self.listed_tests()
+        ):
+            with patch.object(
+                self.executor,
+                'run_cmd',
+                return_value=make_tool_result(
+                    'run_selected_tests',
+                    {},
+                    'OK',
+                    exit_code=0,
+                    stdout='Passed'
+                )
+            ):
+                result = self.executor.execute(
+                    'run_selected_tests',
+                    {
+                        'tests': [
+                            'thread_safe_queue_test'
+                        ]
+                    }
+                )
+
+        self.assertEqual(
+            result['status'],
+            'OK'
+        )
+
+    def test_unknown_selected_test(self):
+        with patch.object(
+            self.executor,
+            'list_ctest',
+            return_value=self.listed_tests()
+        ):
+            result = self.executor.execute(
+                'run_selected_tests',
+                {
+                    'tests': [
+                        'not_a_real_test'
+                    ]
+                }
+            )
+
+        self.assertEqual(
+            result['status'],
+            'INVALID_ARGUMENTS'
+        )
+
+    def test_list_ctest_without_build(self):
+        result = self.executor.execute(
+            'list_ctest',
+            {}
+        )
+
+        self.assertEqual(
+            result['status'],
+            'NOT_FOUND'
+        )
+
+    def test_selected_test_timeout(self):
+        with patch.object(
+            self.executor,
+            'list_ctest',
+            return_value=self.listed_tests()
+        ):
+            with patch.object(
+                self.executor,
+                'run_cmd',
+                return_value=make_tool_result(
+                    'run_selected_tests',
+                    {},
+                    'TIMEOUT',
+                    exit_code=124,
+                    error='Timeout'
+                )
+            ):
+                result = self.executor.execute(
+                    'run_selected_tests',
+                    {
+                        'tests': [
+                            'statistics_test'
+                        ]
+                    }
+                )
+
+        self.assertEqual(
+            result['status'],
+            'TIMEOUT'
+        )
+
+    def test_selected_test_failed(self):
+        with patch.object(
+            self.executor,
+            'list_ctest',
+            return_value=self.listed_tests()
+        ):
+            with patch.object(
+                self.executor,
+                'run_cmd',
+                return_value=make_tool_result(
+                    'run_selected_tests',
+                    {},
+                    'COMMAND_FAILED',
+                    exit_code=8,
+                    stdout='FAILED'
+                )
+            ):
+                result = self.executor.execute(
+                    'run_selected_tests',
+                    {
+                        'tests': [
+                            'worker_pool_test'
+                        ]
+                    }
+                )
+
+        self.assertEqual(
+            result['status'],
+            'COMMAND_FAILED'
+        )
+        self.assertEqual(
+            result['exit_code'],
+            8
+        )
+
+    def test_full_ctest_green(self):
+        with patch.object(
+            self.executor,
+            'run_cmd',
+            return_value=make_tool_result(
+                'run_ctest',
+                {},
+                'OK',
+                exit_code=0,
+                stdout='100% tests passed'
+            )
+        ) as run:
+            result = self.executor.execute(
+                'run_ctest',
+                {}
+            )
+
+        self.assertEqual(
+            result['status'],
+            'OK'
+        )
+
+        command = run.call_args.args[0]
+
+        self.assertIn(
+            '--output-on-failure',
+            command
+        )
+        self.assertNotIn(
+            '-R',
+            command
+        )
+        
 if __name__ == '__main__':
     unittest.main()

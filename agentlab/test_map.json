@@ -1,0 +1,11 @@
+{
+  "thread_safe_queue": [
+    "thread_safe_queue_test"
+  ],
+  "statistics": [
+    "statistics_test"
+  ],
+  "worker_pool": [
+    "worker_pool_test"
+  ]
+}
