@@ -6,6 +6,7 @@ from typing import Any
 import time
 import json
 import re
+import os
 
 TOOLS = [
     (
@@ -253,6 +254,71 @@ class ToolExecutor:
                 raise PermissionError('Symlinks are not readable')
         return target
 
+    def safe_read_text(
+        self,
+        relative: str,
+        max_size: int | None = None
+    ) -> str:
+
+        target = self.safe_path(relative)
+
+        before = os.lstat(target)
+
+        if os.path.islink(target):
+            raise PermissionError(
+                'Symlinks are not readable'
+            )
+
+        flags = os.O_RDONLY
+
+        if hasattr(os, 'O_NOFOLLOW'):
+            flags |= os.O_NOFOLLOW
+
+        fd = os.open(
+            target,
+            flags
+        )
+
+        try:
+            with os.fdopen(
+                fd,
+                'r',
+                encoding='utf-8',
+                errors='replace'
+            ) as file:
+
+                opened = os.fstat(
+                    file.fileno()
+                )
+
+                after = os.lstat(target)
+
+                if (
+                    not os.path.samestat(before, opened)
+                    or not os.path.samestat(opened, after)
+                ):
+                    raise PermissionError(
+                        'File changed during safe read'
+                    )
+
+                if (
+                    max_size is not None
+                    and opened.st_size > max_size
+                ):
+                    raise ValueError(
+                        'File is too large'
+                    )
+
+                return file.read()
+
+        except:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+            raise
+
     def run_cmd(
         self,
         args: list[str],
@@ -419,19 +485,44 @@ class ToolExecutor:
                 continue
 
             for path in root.rglob('*'):
-                if not path.is_file():
-                    continue
+                try:
+                    relative = path.relative_to(
+                        self.workspace
+                    ).as_posix()
 
-                if path.suffix.lower() not in normalized_extensions:
-                    continue
+                    verified = self.safe_path(
+                        relative
+                    )
 
-                if any(
-                    part in {'.git', 'build', '__pycache__'}
-                    for part in path.parts
+                except (
+                    PermissionError,
+                    ValueError,
+                    OSError
                 ):
                     continue
 
-                files.append(path)
+                if not verified.is_file():
+                    continue
+
+                if (
+                    verified.suffix.lower()
+                    not in normalized_extensions
+                ):
+                    continue
+
+                if any(
+                    part in {
+                        '.git',
+                        'build',
+                        '__pycache__'
+                    }
+                    for part in verified.relative_to(
+                        self.workspace
+                    ).parts
+                ):
+                    continue
+
+                files.append(verified)
 
         files.sort(
             key=lambda path: str(path.relative_to(self.workspace))
@@ -450,15 +541,25 @@ class ToolExecutor:
                 truncated = True
                 break
 
-            if path.stat().st_size > MAX_SEARCH_FILE_SIZE:
+            relative = path.relative_to(
+                self.workspace
+            ).as_posix()
+
+            try:
+                text = self.safe_read_text(
+                    relative,
+                    MAX_SEARCH_FILE_SIZE
+                )
+
+            except (
+                PermissionError,
+                ValueError,
+                FileNotFoundError,
+                OSError
+            ):
                 continue
 
             scanned_files += 1
-
-            text = path.read_text(
-                encoding='utf-8',
-                errors='replace'
-            )
 
             lines = text.splitlines()
 
@@ -1020,9 +1121,8 @@ class ToolExecutor:
                         error='Requested file not found'
                     )
 
-                content = target.read_text(
-                    encoding='utf-8',
-                    errors='replace'
+                content = self.safe_read_text(
+                    args.get('path', '')
                 )
 
                 truncated = len(content) > MAX_OUTPUT

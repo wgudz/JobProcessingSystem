@@ -408,6 +408,208 @@ class SafeToolsTest(BaseCase):
         self.assertEqual(data['count'], 2)
         self.assertTrue(result['truncated'])
 
+
+    def test_search_code_reads_normal_file(self):
+        path = self.ws / 'src/normal.cpp'
+
+        path.write_text(
+            'void SafeSymbol();\n',
+            encoding='utf-8'
+        )
+
+        result = ToolExecutor(
+            self.ws
+        ).execute(
+            'search_code',
+            {'query': 'SafeSymbol'}
+        )
+
+        data = json.loads(
+            result['stdout']
+        )
+
+        self.assertEqual(
+            result['status'],
+            'OK'
+        )
+
+        self.assertEqual(
+            data['count'],
+            1
+        )
+
+    def test_search_code_blocks_outside_symlink(self):
+        with tempfile.TemporaryDirectory() as temp:
+            outside = (
+                Path(temp)
+                / 'outside.cpp'
+            )
+
+            outside.write_text(
+                'SECRET_OUTSIDE\n',
+                encoding='utf-8'
+            )
+
+            link = (
+                self.ws
+                / 'src/leak.cpp'
+            )
+
+            try:
+                link.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                self.skipTest(
+                    'Cannot create symlinks'
+                )
+
+            result = ToolExecutor(
+                self.ws
+            ).execute(
+                'search_code',
+                {
+                    'query': 'SECRET_OUTSIDE'
+                }
+            )
+
+            data = json.loads(
+                result['stdout']
+            )
+
+            self.assertEqual(
+                data['count'],
+                0
+            )
+
+    def test_search_code_blocks_symlink_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            outside = Path(temp)
+
+            (
+                outside
+                / 'secret.cpp'
+            ).write_text(
+                'SECRET_DIRECTORY\n',
+                encoding='utf-8'
+            )
+
+            link = (
+                self.ws
+                / 'src/external'
+            )
+
+            try:
+                link.symlink_to(
+                    outside,
+                    target_is_directory=True
+                )
+            except (OSError, NotImplementedError):
+                self.skipTest(
+                    'Cannot create directory symlinks'
+                )
+
+            result = ToolExecutor(
+                self.ws
+            ).execute(
+                'search_code',
+                {
+                    'query': 'SECRET_DIRECTORY'
+                }
+            )
+
+            data = json.loads(
+                result['stdout']
+            )
+
+            self.assertEqual(
+                data['count'],
+                0
+            )
+
+    def test_search_code_blocks_symlink_swap(self):
+        target = (
+            self.ws
+            / 'src/race.cpp'
+        )
+
+        target.write_text(
+            'SAFE_CONTENT\n',
+            encoding='utf-8'
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            outside = (
+                Path(temp)
+                / 'outside.cpp'
+            )
+
+            outside.write_text(
+                'RACE_SECRET\n',
+                encoding='utf-8'
+            )
+
+            replacement = (
+                self.ws
+                / 'src/replacement.cpp'
+            )
+
+            try:
+                replacement.symlink_to(
+                    outside
+                )
+            except (OSError, NotImplementedError):
+                self.skipTest(
+                    'Cannot create symlinks'
+                )
+
+            executor = ToolExecutor(
+                self.ws
+            )
+
+            original_safe_path = (
+                executor.safe_path
+            )
+
+            calls = 0
+
+            def swap_after_check(relative):
+                nonlocal calls
+
+                verified = original_safe_path(
+                    relative
+                )
+
+                if relative == 'src/race.cpp':
+                    calls += 1
+
+                    if calls == 2:
+                        verified.unlink()
+                        replacement.replace(
+                            verified
+                        )
+
+                return verified
+
+            with patch.object(
+                executor,
+                'safe_path',
+                side_effect=swap_after_check
+            ):
+                result = executor.execute(
+                    'search_code',
+                    {
+                        'query': 'RACE_SECRET'
+                    }
+                )
+
+            data = json.loads(
+                result['stdout']
+            )
+
+            self.assertEqual(
+                data['count'],
+                0
+            )
+
 class GitToolsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1152,6 +1354,6 @@ class CTestSelectionTest(BaseCase):
             '-R',
             command
         )
-        
+
 if __name__ == '__main__':
     unittest.main()
