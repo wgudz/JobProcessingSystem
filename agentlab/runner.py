@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .tools import TOOL_SCHEMAS, ToolExecutor
-from .skill_loader import load_skill
+from .skill_loader import (
+    load_skill,
+    load_skill_references
+)
 
 import os
 import tempfile
@@ -77,7 +80,20 @@ def run_agent(
     max_steps=14
 ) -> AgentResult:
 
-    load_skill(project_root / 'skills', skill_name)
+    skills_root = (
+        project_root
+        / 'skills'
+    )
+
+    skill_text = load_skill(
+        skills_root,
+        skill_name
+    )
+
+    skill_references = load_skill_references(
+        skills_root,
+        skill_name
+    )
 
     test_map = json.loads(
         (
@@ -107,19 +123,40 @@ def run_agent(
 
     messages = [
         {
+            'role': 'system',
+            'content': SYSTEM
+        },
+        {
+            'role': 'system',
+            'content': (
+                'Selected diagnostic Skill:\n\n'
+                + skill_text
+            )
+        },
+        {
+            'role': 'system',
+            'content': (
+                'Skill reference materials:\n\n'
+                + skill_references
+            )
+        },
+        {
             'role': 'user',
             'content': (
-                'Investigate the following JobProcessingSystem C++20 incident.\n\n'
+                'Investigate the following JobProcessingSystem '
+                'C++20 incident.\n\n'
                 + issue_text
-                + '\nInspect build/tests if allowed, inspect source and Git diff, '
-                'propose a minimal patch without applying it, and write a verifiable report.'
-                'Use this filename-fragment to CTest mapping when selecting diagnostic tests:\n'
+                + '\nCollect evidence and propose a minimal '
+                'patch without applying it.\n'
+                'Use this filename-fragment to CTest mapping '
+                'when selecting diagnostic tests:\n'
                 + json.dumps(
                     test_map,
                     ensure_ascii=False
                 )
                 + '\nSelective tests are diagnostic only. '
-                'After a C++ fix, full run_ctest is required before claiming final verification.'
+                'After a C++ fix, full run_ctest is required '
+                'before claiming final verification.'
             )
         }
     ]

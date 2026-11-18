@@ -1187,6 +1187,67 @@ class AgentTest(BaseCase):
             'provider_error'
         )
 
+    def test_provider_receives_system_skill_and_references(self):
+        class Provider:
+            def __init__(self):
+                self.messages = None
+                self.calls = 0
+
+            def chat(self, messages, tools):
+                self.calls += 1
+
+                if self.messages is None:
+                    self.messages = messages.copy()
+
+                if self.calls == 1:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'list_files',
+                                'arguments': {}
+                            }
+                        }]
+                    }
+
+                return {
+                    'content': 'Done'
+                }
+
+        provider = Provider()
+
+        run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            provider
+        )
+
+        self.assertEqual(
+            provider.messages[0]['role'],
+            'system'
+        )
+
+        self.assertIn(
+            'cautious senior C++20 engineer',
+            provider.messages[0]['content']
+        )
+
+        self.assertIn(
+            'JobProcessingSystem Triage',
+            provider.messages[1]['content']
+        )
+
+        self.assertIn(
+            'Actual architecture',
+            provider.messages[2]['content']
+        )
+
+        self.assertIn(
+            'Investigation checklist',
+            provider.messages[2]['content']
+        )
+
 
 class ProviderTest(unittest.TestCase):
     def test_local_host_and_tools(self):
