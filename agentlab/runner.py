@@ -14,6 +14,7 @@ from .skill_loader import (
 
 import os
 import tempfile
+import re
 
 SYSTEM = '''You are a cautious senior C++20 engineer investigating JobProcessingSystem.
 Do not invent execution, test results, commits, line numbers, or root causes.
@@ -35,6 +36,9 @@ FAILED = 'FAILED'
 
 MAX_REPEATED_CALLS = 3
 
+VERIFICATION_NOT_RUN = 'NOT_RUN'
+VERIFICATION_PASSED = 'PASSED'
+VERIFICATION_FAILED = 'FAILED'
 
 @dataclass
 class AgentResult:
@@ -46,7 +50,60 @@ class AgentResult:
     termination_reason: str
     steps: int
     tool_calls: int
+    verification_status: str
 
+def get_verification_status(
+    evidence: list[dict]
+) -> str:
+
+    ctest_results = [
+    event['result']
+    for event in evidence
+    if event['tool'] == 'run_ctest'
+    ]
+
+    if not ctest_results:
+        return VERIFICATION_NOT_RUN
+
+    last = ctest_results[-1]
+
+    if (
+        last['status'] != 'OK'
+        or last['exit_code'] != 0
+    ):
+        return VERIFICATION_FAILED
+
+    stdout = last.get(
+        'stdout',
+        ''
+    )
+
+    if 'No tests were found' in stdout:
+        return VERIFICATION_FAILED
+
+    match = re.search(
+        r'(\d+)\s+tests?\s+failed\s+out\s+of\s+(\d+)',
+        stdout
+    )
+
+    if not match:
+        return VERIFICATION_FAILED
+
+    failed = int(
+        match.group(1)
+    )
+
+    total = int(
+        match.group(2)
+    )
+
+    if total <= 0:
+        return VERIFICATION_FAILED
+
+    if failed != 0:
+        return VERIFICATION_FAILED
+
+    return VERIFICATION_PASSED
 
 def make_result(
     report,
@@ -65,7 +122,8 @@ def make_result(
         status,
         reason,
         steps,
-        tool_calls
+        tool_calls,
+        get_verification_status(evidence)
     )
 
 
@@ -283,10 +341,15 @@ def run_agent(
             result_status = result['status']
 
             if result_status in (
+                'DENIED',
                 'INVALID_ARGUMENTS',
                 'NOT_FOUND',
                 'TIMEOUT'
             ):
+                verification_status = get_verification_status(
+                    evidence
+                )
+                
                 return make_result(
                     result['error'],
                     evidence,
@@ -469,6 +532,7 @@ def save_report(
         '- Workspace: `' + str(Path(workspace).resolve()) + '`',
         '- Skill: `' + skill_name + '`',
         '- Status: `' + result.status + '`',
+        '- Verification: `' + result.verification_status + '`',
         '- Reason: `' + result.termination_reason + '`',
         '- Steps: `' + str(result.steps) + '`',
         '- Tool calls: `' + str(result.tool_calls) + '`',
@@ -574,7 +638,9 @@ def save_json_report(
         'tool_calls': result.tool_calls,
 
         'conclusion': result.report,
-        'events': result.events
+        'events': result.events,
+
+        'verification_status': result.verification_status,
     }
 
     safe_write_report(

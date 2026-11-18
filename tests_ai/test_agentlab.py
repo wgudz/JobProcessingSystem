@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agentlab.providers import MockProvider, OllamaProvider
-from agentlab.runner import run_agent, save_report
+from agentlab.runner import run_agent, save_report, get_verification_status
 from agentlab.skill_loader import load_skill
 from agentlab.tools import (
     ToolExecutor,
@@ -134,7 +134,7 @@ class CliTest(BaseCase):
                 '--output-json', str(output_json)
             ])
 
-        self.assertEqual(result, 0)
+        self.assertEqual(result, 2)
         self.assertTrue(report.exists())
         self.assertTrue(output_json.exists())
 
@@ -992,20 +992,51 @@ class SkillTest(unittest.TestCase):
 
 class AgentTest(BaseCase):
     def test_mock_runs_and_reports(self):
-        agent = run_agent(ROOT, self.ws, 'job-processing-triage', MockProvider(), allow_exec=False, max_steps=12)
-        self.assertEqual(len(agent.events), 8)
-        self.assertEqual(agent.events[0]['tool'], 'list_files')
-        self.assertIn('Execution denied', agent.events[3]['result']['error'])
-        self.assertIn('MOCK', agent.report)
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            MockProvider(),
+            allow_exec=False,
+            max_steps=12
+        )
+
+        self.assertEqual(
+            agent.status,
+            'BLOCKED'
+        )
+
+        self.assertEqual(
+            agent.termination_reason,
+            'tool_error'
+        )
+
+        self.assertEqual(
+            agent.events[-1]['result']['status'],
+            'DENIED'
+        )
+
         dest = (
             self.ws
             / 'reports'
             / 'report.md'
         )
-        save_report(agent, dest, self.ws, 'job-processing-triage')
-        text = dest.read_text()
-        self.assertIn('## Evidence', text)
-        self.assertIn('run_ctest', text)
+
+        save_report(
+            agent,
+            dest,
+            self.ws,
+            'job-processing-triage'
+        )
+
+        text = dest.read_text(
+            encoding='utf-8'
+        )
+
+        self.assertIn(
+            '## Evidence',
+            text
+        )
 
     def test_cannot_use_unapproved_tool(self):
         class BadModel:
@@ -1248,6 +1279,122 @@ class AgentTest(BaseCase):
             provider.messages[2]['content']
         )
 
+    def test_list_files_does_not_verify_ctest(self):
+        class Provider:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, messages, tools):
+                self.calls += 1
+
+                if self.calls == 1:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'list_files',
+                                'arguments': {}
+                            }
+                        }]
+                    }
+
+                return {
+                    'content': 'All tests passed.'
+                }
+
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            Provider()
+        )
+
+        self.assertEqual(
+            agent.status,
+            'COMPLETED'
+        )
+
+        self.assertEqual(
+            agent.verification_status,
+            'NOT_RUN'
+        )
+
+    def test_denied_ctest_blocks_session(self):
+        class Provider:
+            def chat(self, messages, tools):
+                return {
+                    'content': '',
+                    'tool_calls': [{
+                        'function': {
+                            'name': 'run_ctest',
+                            'arguments': {}
+                        }
+                    }]
+                }
+
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            Provider(),
+            allow_exec=False
+        )
+
+        self.assertEqual(
+            agent.status,
+            'BLOCKED'
+        )
+
+        self.assertEqual(
+            agent.verification_status,
+            'FAILED'
+        )
+
+    def test_real_ctest_result_marks_verification_passed(self):
+        result = make_tool_result(
+            'run_ctest',
+            {},
+            'OK',
+            exit_code=0,
+            stdout=(
+                '100% tests passed, '
+                '0 tests failed out of 11'
+            )
+        )
+
+        evidence = [{
+            'tool': 'run_ctest',
+            'arguments': {},
+            'result': result
+        }]
+
+        self.assertEqual(
+            get_verification_status(evidence),
+            'PASSED'
+        )
+
+    def test_failed_ctest_marks_verification_failed(self):
+        result = make_tool_result(
+            'run_ctest',
+            {},
+            'COMMAND_FAILED',
+            exit_code=8,
+            stdout=(
+                '91% tests passed, '
+                '1 tests failed out of 11'
+            )
+        )
+
+        evidence = [{
+            'tool': 'run_ctest',
+            'arguments': {},
+            'result': result
+        }]
+
+        self.assertEqual(
+            get_verification_status(evidence),
+            'FAILED'
+        )
 
 class ProviderTest(unittest.TestCase):
     def test_local_host_and_tools(self):
