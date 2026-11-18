@@ -9,6 +9,8 @@ from pathlib import Path
 from .tools import TOOL_SCHEMAS, ToolExecutor
 from .skill_loader import load_skill
 
+import os
+import tempfile
 
 SYSTEM = '''You are a cautious senior C++20 engineer investigating JobProcessingSystem.
 Do not invent execution, test results, commits, line numbers, or root causes.
@@ -320,6 +322,101 @@ def run_agent(
     )
 
 
+def validate_report_path(
+    output: Path,
+    project_root: Path,
+    suffix: str
+) -> Path:
+
+    project_root = Path(
+        project_root
+    ).resolve(strict=True)
+
+    reports_path = (
+        project_root
+        / 'reports'
+    )
+
+    if (
+        reports_path.exists()
+        and reports_path.is_symlink()
+    ):
+        raise ValueError(
+            'Reports directory cannot be a symlink'
+        )
+
+    reports_path.mkdir(
+        exist_ok=True
+    )
+
+    reports_dir = reports_path.resolve(
+        strict=True
+    )
+
+    if reports_dir.parent != project_root:
+        raise ValueError(
+            'Reports directory outside project'
+        )
+
+    output = Path(output)
+
+    if not output.is_absolute():
+        output = project_root / output
+
+    output = output.absolute()
+
+    if output.parent.resolve(
+        strict=True
+    ) != reports_dir:
+        raise ValueError(
+            'Report outside reports directory'
+        )
+
+    if output.suffix.lower() != suffix:
+        raise ValueError(
+            'Invalid report extension'
+        )
+
+    return output
+
+
+def safe_write_report(
+    output: Path,
+    content: str,
+    project_root: Path,
+    suffix: str
+) -> None:
+
+    output = validate_report_path(
+        output,
+        project_root,
+        suffix
+    )
+
+    reports_dir = output.parent
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix='.report-',
+        dir=reports_dir
+    )
+
+    try:
+        with os.fdopen(
+            fd,
+            'w',
+            encoding='utf-8'
+        ) as file:
+            file.write(content)
+
+        os.replace(
+            tmp_name,
+            output
+        )
+
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
 def save_report(
     result: AgentResult,
     output: Path,
@@ -411,14 +508,11 @@ def save_report(
             ''
         ]
 
-    output.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    output.write_text(
+    safe_write_report(
+        output,
         '\n'.join(lines),
-        encoding='utf-8'
+        workspace,
+        '.md'
     )
 
 
@@ -446,16 +540,13 @@ def save_json_report(
         'events': result.events
     }
 
-    output.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    output.write_text(
+    safe_write_report(
+        output,
         json.dumps(
             data,
             indent=2,
             ensure_ascii=False
         ),
-        encoding='utf-8'
+        workspace,
+        '.json'
     )

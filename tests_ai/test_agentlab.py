@@ -56,7 +56,11 @@ class CliTest(BaseCase):
             encoding='utf-8'
         )
 
-        report = self.ws / 'report.md'
+        report = (
+            self.ws
+            / 'reports'
+            / 'report.md'
+        )
         stderr = io.StringIO()
 
         with patch('sys.stderr', stderr):
@@ -108,8 +112,16 @@ class CliTest(BaseCase):
             encoding='utf-8'
         )
 
-        report = self.ws / 'report.md'
-        output_json = self.ws / 'report.json'
+        report = (
+            self.ws
+            / 'reports'
+            / 'report.md'
+        )
+        output_json = (
+            self.ws
+            / 'reports'
+            / 'report.json'
+        )
         stdout = io.StringIO()
 
         with patch('sys.stdout', stdout):
@@ -179,7 +191,11 @@ class CliTest(BaseCase):
                     'content': 'Search completed.'
                 }
 
-        report = self.ws / 'search-report.md'
+        report = (
+            self.ws
+            / 'reports'
+            / 'search-report.md'
+        )
 
         with patch(
             'agentlab.cli.MockProvider',
@@ -196,6 +212,143 @@ class CliTest(BaseCase):
             'search_code',
             report.read_text(encoding='utf-8')
         )
+
+
+    def test_report_cannot_overwrite_source(self):
+        source = (
+            self.ws
+            / 'src'
+            / 'example.cpp'
+        )
+
+        source.write_text(
+            'int original=1;\n',
+            encoding='utf-8'
+        )
+
+        with self.assertRaises(
+            SystemExit
+        ) as context:
+
+            main([
+                '--provider',
+                'mock',
+                '--workspace',
+                str(self.ws),
+                '--report',
+                'src/example.cpp'
+            ])
+
+        self.assertEqual(
+            context.exception.code,
+            2
+        )
+
+        self.assertEqual(
+            source.read_text(
+                encoding='utf-8'
+            ),
+            'int original=1;\n'
+        )
+
+    def test_json_report_cannot_overwrite_source(self):
+        source = (
+            self.ws
+            / 'src'
+            / 'example.cpp'
+        )
+
+        source.write_text(
+            'int original=1;\n',
+            encoding='utf-8'
+        )
+
+        with self.assertRaises(
+            SystemExit
+        ) as context:
+
+            main([
+                '--provider',
+                'mock',
+                '--workspace',
+                str(self.ws),
+                '--report',
+                'reports/report.md',
+                '--output-json',
+                'src/example.cpp'
+            ])
+
+        self.assertEqual(
+            context.exception.code,
+            2
+        )
+
+        self.assertEqual(
+            source.read_text(
+                encoding='utf-8'
+            ),
+            'int original=1;\n'
+        )
+
+    def test_report_rejects_wrong_extension(self):
+        with self.assertRaises(
+            SystemExit
+        ) as context:
+
+            main([
+                '--provider',
+                'mock',
+                '--workspace',
+                str(self.ws),
+                '--report',
+                'reports/report.json'
+            ])
+
+        self.assertEqual(
+            context.exception.code,
+            2
+        )
+
+    def test_reports_directory_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            outside = Path(temp)
+
+            reports = (
+                self.ws
+                / 'reports'
+            )
+
+            try:
+                reports.symlink_to(
+                    outside,
+                    target_is_directory=True
+                )
+            except (
+                OSError,
+                NotImplementedError
+            ):
+                self.skipTest(
+                    'Cannot create directory symlinks'
+                )
+
+            with self.assertRaises(
+                SystemExit
+            ) as context:
+
+                main([
+                    '--provider',
+                    'mock',
+                    '--workspace',
+                    str(self.ws),
+                    '--report',
+                    'reports/report.md'
+                ])
+
+            self.assertEqual(
+                context.exception.code,
+                2
+            )
+        
 
 class SafeToolsTest(BaseCase):
     def test_list_files_works(self):
@@ -844,7 +997,11 @@ class AgentTest(BaseCase):
         self.assertEqual(agent.events[0]['tool'], 'list_files')
         self.assertIn('Execution denied', agent.events[3]['result']['error'])
         self.assertIn('MOCK', agent.report)
-        dest = self.ws / 'report.md'
+        dest = (
+            self.ws
+            / 'reports'
+            / 'report.md'
+        )
         save_report(agent, dest, self.ws, 'job-processing-triage')
         text = dest.read_text()
         self.assertIn('## Evidence', text)
@@ -897,7 +1054,11 @@ class AgentTest(BaseCase):
             model = 'local-test'
             def chat(self, messages, tools): return {'role': 'assistant', 'content': 'Summary'}
         agent = run_agent(ROOT, self.ws, 'job-processing-triage', Local())
-        dest = self.ws / 'report.md'
+        dest = (
+            self.ws
+            / 'reports'
+            / 'report.md'
+        )
         save_report(agent, dest, self.ws, 'job-processing-triage')
         self.assertIn('local-test', dest.read_text())
 

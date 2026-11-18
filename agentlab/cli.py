@@ -4,7 +4,12 @@ import argparse
 import json
 from pathlib import Path
 from .providers import MockProvider, OllamaProvider
-from .runner import run_agent, save_report, save_json_report
+from .runner import (
+    run_agent,
+    save_report,
+    save_json_report,
+    validate_report_path
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -97,7 +102,11 @@ def main(argv=None) -> int:
 
     p.add_argument('--allow-exec', action='store_true', help='Run CMake and CTest on TRUSTED code only')
     p.add_argument('--max-steps', type=int, default=14)
-    p.add_argument('--report', type=Path, default=ROOT / 'reports' / 'latest.md')
+    p.add_argument(
+        '--report',
+        type=Path,
+        default=Path('reports/latest.md')
+    )
     args = p.parse_args(argv)
 
     if bool(args.issue_id) != bool(args.issue_file):
@@ -113,7 +122,20 @@ def main(argv=None) -> int:
 
         if not workspace.is_dir():
             raise ValueError(f'Workspace directory not found: {workspace}')
+        report_path = validate_report_path(
+            args.report,
+            workspace,
+            '.md'
+        )
 
+        output_json_path = None
+
+        if args.output_json:
+            output_json_path = validate_report_path(
+                args.output_json,
+                workspace,
+                '.json'
+            )
         issue = None
 
         if args.issue_file:
@@ -131,12 +153,17 @@ def main(argv=None) -> int:
             max_steps=args.max_steps
         )
 
-        save_report(result, args.report, workspace, args.skill)
+        save_report(
+            result,
+            report_path,
+            workspace,
+            args.skill
+        )
 
-        if args.output_json:
+        if output_json_path:
             save_json_report(
                 result,
-                args.output_json,
+                output_json_path,
                 workspace,
                 args.skill,
                 issue_id=args.issue_id
@@ -154,7 +181,7 @@ def main(argv=None) -> int:
     for event in result.events:
         print(f'  {event["tool"]}: exit={event["result"].get("exit_code", "n/a")}')
 
-    print(f'Report: {args.report.resolve()}\n')
+    print(f'Report: {report_path}\n')
     print(result.report)
 
     if result.status == 'COMPLETED':
