@@ -237,13 +237,25 @@ def run_agent(
                 messages,
                 TOOL_SCHEMAS
             )
+
+        except RuntimeError as exc:
+            return make_result(
+                f'Provider unavailable: {exc}',
+                evidence,
+                provider,
+                BLOCKED,
+                'provider_unavailable',
+                steps,
+                tool_calls
+            )
+
         except Exception as exc:
             return make_result(
-                f'Provider error: {exc}',
+                f'Unexpected agent error: {exc}',
                 evidence,
                 provider,
                 FAILED,
-                'provider_error',
+                'unexpected_error',
                 steps,
                 tool_calls
             )

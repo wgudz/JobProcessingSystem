@@ -1286,10 +1286,12 @@ class AgentTest(BaseCase):
         )
 
 
-    def test_provider_error_is_failed(self):
+    def test_provider_unavailable_is_blocked(self):
         class Provider:
             def chat(self, messages, tools):
-                raise RuntimeError('provider unavailable')
+                raise RuntimeError(
+                    'provider unavailable'
+                )
 
         agent = run_agent(
             ROOT,
@@ -1298,10 +1300,19 @@ class AgentTest(BaseCase):
             Provider()
         )
 
-        self.assertEqual(agent.status, 'FAILED')
+        self.assertEqual(
+            agent.status,
+            'BLOCKED'
+        )
+
         self.assertEqual(
             agent.termination_reason,
-            'provider_error'
+            'provider_unavailable'
+        )
+
+        self.assertIn(
+            'Provider unavailable',
+            agent.report
         )
 
     def test_provider_receives_system_skill_and_references(self):
@@ -1525,6 +1536,30 @@ class AgentTest(BaseCase):
         )
 
         execute.assert_not_called()
+
+    def test_unexpected_provider_error_is_failed(self):
+        class Provider:
+            def chat(self, messages, tools):
+                raise ValueError(
+                    'unexpected bug'
+                )
+
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            Provider()
+        )
+
+        self.assertEqual(
+            agent.status,
+            'FAILED'
+        )
+
+        self.assertEqual(
+            agent.termination_reason,
+            'unexpected_error'
+        )
 
 class ProviderTest(unittest.TestCase):
     def test_local_host_and_tools(self):
