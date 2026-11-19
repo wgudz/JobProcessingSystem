@@ -7,7 +7,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agentlab.providers import MockProvider, OllamaProvider
-from agentlab.runner import run_agent, save_report, get_verification_status, save_evidence_journal, validate_evidence_references
+from agentlab.runner import (
+    run_agent, save_report, 
+    get_verification_status, 
+    save_evidence_journal, 
+    validate_evidence_references,
+    parse_model_findings,
+    validate_machine_report,
+    validate_report_consistency,
+    AgentResult,
+    COMPLETED,
+    VERIFICATION_PASSED,
+    save_json_report
+    
+)
 from agentlab.skill_loader import load_skill
 from agentlab.tools import (
     ToolExecutor,
@@ -23,7 +36,6 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
 
-
 class BaseCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -35,6 +47,138 @@ class BaseCase(unittest.TestCase):
         (self.ws / 'src/statistics.cpp').write_text('++cancelled_;\n')
         (self.ws / 'include/job_system/thread_safe_queue.h').write_text('template<class T> class ThreadSafeQueue {};\n')
         (self.ws / 'tests/thread_safe_queue_test.cpp').write_text('int main(){return 0;}\n')
+
+class ReportFormatTest(BaseCase):
+    def make_event(
+        self,
+        evidence_id,
+        tool,
+        status='OK',
+        exit_code=0,
+        stdout='',
+        error=None
+    ):
+        result = make_tool_result(
+            tool,
+            {},
+            status,
+            exit_code=exit_code,
+            stdout=stdout,
+            error=error
+        )
+
+        return {
+            'id': evidence_id,
+            'tool': tool,
+            'arguments': {},
+            'result': result,
+            'sha256': '0' * 64
+        }
+    def test_green_reports_are_consistent(self):
+        events = [
+            self.make_event(
+                'EVID-001',
+                'run_cmake_build'
+            ),
+            self.make_event(
+                'EVID-002',
+                'run_ctest',
+                stdout=(
+                    '100% tests passed, '
+                    '0 tests failed out of 11'
+                )
+            )
+        ]
+
+        result = AgentResult(
+            report=(
+                '## Facts\n'
+                '- Build passed EVID-001\n'
+                '- CTest passed EVID-002\n'
+                '## Hypotheses\n'
+                'No remaining failure identified.\n'
+                '## Minimal fix\n'
+                'No change required.\n'
+                '## Test plan\n'
+                'Run full CTest.\n'
+                '## Risks\n'
+                'None identified.\n'
+                '## Final result\n'
+                'Workspace is green.'
+            ),
+            events=events,
+            provider='MockProvider',
+            model='mock',
+            status=COMPLETED,
+            termination_reason='final_answer',
+            steps=1,
+            tool_calls=2,
+            verification_status=VERIFICATION_PASSED,
+            session_id='session-green'
+        )
+
+        md = self.ws / 'reports' / 'green.md'
+        js = self.ws / 'reports' / 'green.json'
+
+        save_report(
+            result,
+            md,
+            self.ws,
+            'job-processing-triage',
+            'BUG-001'
+        )
+
+        save_json_report(
+            result,
+            js,
+            self.ws,
+            'job-processing-triage',
+            'BUG-001'
+        )
+
+        markdown = md.read_text(
+            encoding='utf-8'
+        )
+
+        data = json.loads(
+            js.read_text(
+                encoding='utf-8'
+            )
+        )
+
+        self.assertTrue(
+            validate_machine_report(data)
+        )
+
+        self.assertTrue(
+            validate_report_consistency(
+                markdown,
+                data
+            )
+        )
+
+        self.assertEqual(
+            data['verification']['ctest'],
+            'PASSED'
+        )
+
+        self.assertNotEqual(
+            data['status'],
+            'verified_fix'
+        )
+    def test_fact_without_evidence_is_unverifiable(self):
+        findings = parse_model_findings(
+            (
+                '## Facts\n'
+                '- worker.cpp contains a race condition\n'
+            ),
+            []
+        )
+
+        self.assertIn(
+            '[UNVERIFIABLE]',
+            findings['facts'][0]
+        )
 
 class CliTest(BaseCase):
     def test_issue_id_requires_issue_file(self):

@@ -172,7 +172,8 @@ def main(argv=None) -> int:
             result,
             report_path,
             workspace,
-            args.skill
+            args.skill,
+            args.issue_id
         )
 
         if output_json_path:

@@ -63,6 +63,7 @@ class AgentResult:
     tool_calls: int
     verification_status: str
     session_id: str
+    repo_head: str = ''
 
 def get_verification_status(
     evidence: list[dict]
@@ -260,6 +261,15 @@ def run_agent(
                 + '\nSelective tests are diagnostic only. '
                 'After a C++ fix, full run_ctest is required '
                 'before claiming final verification.'
+                + '\nReturn the final answer using these headings exactly:'
+                + '\n## Facts'
+                + '\n## Hypotheses'
+                + '\n## Minimal fix'
+                + '\n## Test plan'
+                + '\n## Risks'
+                + '\n## Final result'
+                + '\nEvery fact about source code or tests must cite '
+                + 'at least one existing EVID-* identifier.'
             )
         }
     ]
@@ -703,13 +713,256 @@ def save_evidence_journal(
         workspace,
         '.json'
     )
+
+def build_verification(
+    result: AgentResult
+) -> dict:
+
+    build_events = [
+        event
+        for event in result.events
+        if event['tool'] == 'run_cmake_build'
+    ]
+
+    ctest_events = [
+        event
+        for event in result.events
+        if event['tool'] == 'run_ctest'
+    ]
+
+    build_status = 'NOT_RUN'
+
+    if build_events:
+        last = build_events[-1]['result']
+
+        if (
+            last['status'] == 'OK'
+            and last['exit_code'] == 0
+        ):
+            build_status = 'PASSED'
+        else:
+            build_status = 'FAILED'
+
+    return {
+        'build': build_status,
+        'ctest': result.verification_status,
+
+        # Agent tylko proponuje zmianę.
+        # Nie udajemy, że ją zweryfikował po zastosowaniu.
+        'fix_status': 'not_verified',
+
+        'ctest_executed': bool(ctest_events)
+    }
+
+
+def build_limitations(
+    result: AgentResult
+) -> list[str]:
+
+    limitations = []
+
+    if result.verification_status == VERIFICATION_NOT_RUN:
+        limitations.append(
+            'CTest was not executed.'
+        )
+
+    if result.termination_reason == 'provider_unavailable':
+        limitations.append(
+            'Model provider was unavailable.'
+        )
+
+    for event in result.events:
+        if (
+            event['tool'] == 'run_ctest'
+            and event['result']['status'] == 'DENIED'
+        ):
+            limitations.append(
+                'CTest execution was blocked.'
+            )
+            break
+
+    return limitations
+
+def get_result_repo_head(
+    result: AgentResult,
+    workspace: Path
+) -> str:
+
+    if not result.repo_head:
+        result.repo_head = get_repo_sha(workspace)
+
+    return result.repo_head
+
+def parse_model_findings(
+    text: str,
+    events: list[dict]
+) -> dict:
+
+    sections = {
+        'facts': [],
+        'hypotheses': [],
+        'minimal_change': [],
+        'test_plan': [],
+        'risks': [],
+        'final_result': []
+    }
+
+    names = {
+        'facts': 'facts',
+        'fakty': 'facts',
+        'hypotheses': 'hypotheses',
+        'hipotezy': 'hypotheses',
+        'minimal fix': 'minimal_change',
+        'minimal change': 'minimal_change',
+        'minimalna zmiana': 'minimal_change',
+        'test plan': 'test_plan',
+        'plan testów': 'test_plan',
+        'verification': 'test_plan',
+        'risks': 'risks',
+        'ryzyka': 'risks',
+        'final result': 'final_result',
+        'wynik końcowy': 'final_result'
+    }
+
+    current = None
+
+    for line in text.splitlines():
+        heading = (
+            line.strip()
+            .lstrip('#')
+            .strip()
+            .rstrip(':')
+            .lower()
+        )
+
+        if heading in names:
+            current = names[heading]
+            continue
+
+        if current:
+            sections[current].append(line)
+
+    if not any(sections.values()):
+        sections['final_result'] = [
+            text.strip()
+        ]
+
+    facts = []
+
+    for line in sections['facts']:
+        fact = line.strip()
+
+        if fact.startswith('-'):
+            fact = fact[1:].strip()
+
+        if not fact:
+            continue
+
+        if not EVIDENCE_REF_RE.search(fact):
+            fact += ' [UNVERIFIABLE]'
+
+        facts.append(fact)
+
+    return {
+        'facts': facts,
+        'hypotheses': '\n'.join(
+            sections['hypotheses']
+        ).strip(),
+        'minimal_change': '\n'.join(
+            sections['minimal_change']
+        ).strip(),
+        'test_plan': '\n'.join(
+            sections['test_plan']
+        ).strip(),
+        'risks': '\n'.join(
+            sections['risks']
+        ).strip(),
+        'final_result': '\n'.join(
+            sections['final_result']
+        ).strip()
+    }
+
+def build_report_data(
+    result: AgentResult,
+    workspace: Path,
+    issue_id=None
+) -> dict:
+
+    return {
+        'session_id': result.session_id,
+        'issue_id': issue_id,
+        'status': result.status,
+        'model': result.model,
+        'repo_head': get_result_repo_head(
+            result,
+            workspace
+        ),
+        'events': result.events,
+        'findings': parse_model_findings(
+            result.report,
+            result.events
+        ),
+        'verification': build_verification(
+            result
+        ),
+        'limitations': build_limitations(
+            result
+        )
+    }
+
+def validate_machine_report(
+    data: dict
+) -> bool:
+
+    required = {
+        'session_id',
+        'issue_id',
+        'status',
+        'model',
+        'repo_head',
+        'events',
+        'findings',
+        'verification',
+        'limitations'
+    }
+
+    if not required.issubset(data):
+        return False
+
+    if not isinstance(
+        data['events'],
+        list
+    ):
+        return False
+
+    if not isinstance(
+        data['findings'],
+        dict
+    ):
+        return False
+
+    if not isinstance(
+        data['verification'],
+        dict
+    ):
+        return False
+
+    if not isinstance(
+        data['limitations'],
+        list
+    ):
+        return False
+
+    return True
     
 def save_report(
     result: AgentResult,
     output: Path,
     workspace: Path,
-    skill_name: str
+    skill_name: str,
+    issue_id=None
 ) -> None:
+
     if not validate_evidence_references(
         result.report,
         result.events
@@ -718,96 +971,118 @@ def save_report(
             'Report references unknown evidence ID'
         )
 
+    data = build_report_data(
+        result,
+        workspace,
+        issue_id
+    )
+
+    findings = data['findings']
+    verification = data['verification']
+
+    facts = findings['facts']
+
+    if not facts:
+        facts = [
+            'No verified model facts were provided.'
+        ]
+
     lines = [
         '# AI Job Processing Engineer: investigation report',
         '',
-        '- UTC: ' + datetime.now(timezone.utc).isoformat(timespec='seconds'),
-        '- Provider: `' + result.provider + '` / `' + result.model + '`',
-        '- Workspace: `' + str(Path(workspace).resolve()) + '`',
+
+        '## Issue',
+        '',
+        '- Issue ID: `' + str(issue_id) + '`',
+        '',
+
+        '## Environment',
+        '',
+        '- Session ID: `' + result.session_id + '`',
+        '- Provider: `' + result.provider + '`',
+        '- Model: `' + result.model + '`',
+        '- Repository HEAD: `' + data['repo_head'] + '`',
         '- Skill: `' + skill_name + '`',
-        '- Status: `' + result.status + '`',
-        '- Verification: `' + result.verification_status + '`',
-        '- Reason: `' + result.termination_reason + '`',
-        '- Steps: `' + str(result.steps) + '`',
-        '- Tool calls: `' + str(result.tool_calls) + '`',
-        '- Session: `' + result.session_id + '`',
         '',
-        '## Conclusion',
+
+        '## Verification scope',
         '',
-        result.report,
+        '- Evidence count: `'
+        + str(len(result.events))
+        + '`',
+        '- Build: `'
+        + verification['build']
+        + '`',
+        '- CTest: `'
+        + verification['ctest']
+        + '`',
+        '- Fix status: `'
+        + verification['fix_status']
+        + '`',
+        '',
+
+        '### Evidence',
         ''
     ]
 
     for event in result.events:
-        if (
-            event['tool'] == 'git_status'
-            and event['result']['status'] == 'OK'
-        ):
-            try:
-                data = json.loads(
-                    event['result']['stdout']
-                )
-
-                lines += [
-                    '## Working tree change',
-                    '',
-                    '- Branch: `' + data['branch'] + '`',
-                    '- HEAD: `' + data['head'] + '`',
-                    '- Changed entries: `'
-                    + str(len(data['working_tree']))
-                    + '`',
-                    ''
-                ]
-            except (json.JSONDecodeError, KeyError, TypeError):
-                pass
-
-        if (
-            event['tool'] == 'git_show'
-            and event['result']['status'] == 'OK'
-        ):
-            try:
-                data = json.loads(
-                    event['result']['stdout']
-                )
-
-                lines += [
-                    '## Commit change',
-                    '',
-                    '- Commit: `' + data['commit'] + '`',
-                    '- Compared with: `'
-                    + str(data['base'])
-                    + '`',
-                    ''
-                ]
-            except (json.JSONDecodeError, KeyError, TypeError):
-                pass
+        lines.append(
+            '- '
+            + event['id']
+            + ': `'
+            + event['tool']
+            + '` — `'
+            + event['result']['status']
+            + '`'
+        )
 
     lines += [
-        '## Evidence (tool results, not generated by the model)',
+        '',
+        '## Facts',
         ''
     ]
 
-    for i, event in enumerate(result.events, 1):
-        lines += [
-            '### '
-            + event['id']
-            + ' — `'
-            + event['tool']
-            + '`',
-            '',
-            '```json',
-            json.dumps(
-                {
-                    'arguments': event['arguments'],
-                    'result': event['result'],
-                    'sha256': event['sha256']
-                },
-                indent=2,
-                ensure_ascii=False
-            ),
-            '```',
-            ''
-        ]
+    for fact in facts:
+        lines.append(
+            '- ' + fact
+        )
+
+    lines += [
+        '',
+        '## Hypotheses',
+        '',
+        findings['hypotheses']
+        or 'No hypotheses provided.',
+        '',
+
+        '## Proposed minimal change',
+        '',
+        findings['minimal_change']
+        or 'No minimal change provided.',
+        '',
+
+        '## Test plan',
+        '',
+        findings['test_plan']
+        or 'No test plan provided.',
+        '',
+
+        '## Risks',
+        '',
+        findings['risks']
+        or 'No risks provided.',
+        '',
+
+        '## Final result',
+        '',
+        '- Status: `' + result.status + '`',
+        '- Reason: `'
+        + result.termination_reason
+        + '`',
+        '',
+        findings['final_result']
+        or 'No final model conclusion.'
+    ]
 
     safe_write_report(
         output,
@@ -825,25 +1100,16 @@ def save_json_report(
     issue_id=None
 ) -> None:
 
-    data = {
-        'issue_id': issue_id,
-        'provider': result.provider,
-        'model': result.model,
-        'workspace': str(Path(workspace).resolve()),
-        'skill': skill_name,
+    data = build_report_data(
+        result,
+        workspace,
+        issue_id
+    )
 
-        'status': result.status,
-        'termination_reason': result.termination_reason,
-        'steps': result.steps,
-        'tool_calls': result.tool_calls,
-
-        'conclusion': result.report,
-        'events': result.events,
-
-        'verification_status': result.verification_status,
-
-        'session_id': result.session_id
-    }
+    if not validate_machine_report(data):
+        raise ValueError(
+            'Invalid machine report'
+        )
 
     safe_write_report(
         output,
@@ -854,4 +1120,40 @@ def save_json_report(
         ),
         workspace,
         '.json'
+    )
+
+def validate_report_consistency(
+    markdown: str,
+    data: dict
+) -> bool:
+
+    checks = [
+        (
+            '- Issue ID: `'
+            + str(data['issue_id'])
+            + '`'
+        ),
+
+        (
+            '- Repository HEAD: `'
+            + data['repo_head']
+            + '`'
+        ),
+
+        (
+            '- Evidence count: `'
+            + str(len(data['events']))
+            + '`'
+        ),
+
+        (
+            '- Status: `'
+            + data['status']
+            + '`'
+        )
+    ]
+
+    return all(
+        item in markdown
+        for item in checks
     )
