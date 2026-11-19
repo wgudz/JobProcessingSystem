@@ -4,6 +4,7 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
 Logger::Logger(std::ostream& output)
     : output_(output)
@@ -38,7 +39,20 @@ void Logger::log(
     const auto time = std::chrono::system_clock::to_time_t(now);
 
     std::tm localTime{};
-    localtime_s(&localTime, &time);
+
+    #ifdef _WIN32
+        const bool time_ok =
+            localtime_s(&localTime, &time) == 0;
+    #else
+        const bool time_ok =
+            localtime_r(&time, &localTime) != nullptr;
+    #endif
+
+    if (!time_ok) {
+        throw std::runtime_error(
+            "Cannot convert current time"
+        );
+    }
 
     const auto milliseconds =
         std::chrono::duration_cast<std::chrono::milliseconds>(
