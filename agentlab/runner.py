@@ -16,6 +16,10 @@ import os
 import tempfile
 import re
 
+import hashlib
+import uuid
+import subprocess
+
 SYSTEM = '''You are a cautious senior C++20 engineer investigating JobProcessingSystem.
 Do not invent execution, test results, commits, line numbers, or root causes.
 Use tools for facts. Separate Facts / Hypotheses / Minimal fix / Verification / Risks.
@@ -41,6 +45,12 @@ VERIFICATION_NOT_RUN = 'NOT_RUN'
 VERIFICATION_PASSED = 'PASSED'
 VERIFICATION_FAILED = 'FAILED'
 
+PROGRAM_VERSION = '0.1'
+
+EVIDENCE_REF_RE = re.compile(
+    r'\bEVID-\d{3}\b'
+)
+
 @dataclass
 class AgentResult:
     report: str
@@ -52,6 +62,7 @@ class AgentResult:
     steps: int
     tool_calls: int
     verification_status: str
+    session_id: str
 
 def get_verification_status(
     evidence: list[dict]
@@ -124,9 +135,42 @@ def make_result(
         reason,
         steps,
         tool_calls,
-        get_verification_status(evidence)
+        get_verification_status(evidence),
+        uuid.uuid4().hex
     )
 
+def add_evidence(
+    evidence: list[dict],
+    tool: str,
+    arguments: dict,
+    result: dict
+) -> dict:
+
+    evidence_id = (
+        f'EVID-{len(evidence) + 1:03d}'
+    )
+
+    content = json.dumps(
+        result,
+        sort_keys=True,
+        ensure_ascii=False
+    )
+
+    sha256 = hashlib.sha256(
+        content.encode('utf-8')
+    ).hexdigest()
+
+    event = {
+        'id': evidence_id,
+        'tool': tool,
+        'arguments': arguments,
+        'result': result,
+        'sha256': sha256
+    }
+
+    evidence.append(event)
+
+    return event
 
 def run_agent(
     project_root: Path,
@@ -355,11 +399,12 @@ def run_agent(
                 args
             )
 
-            evidence.append({
-                'tool': name,
-                'arguments': args,
-                'result': result
-            })
+            event = add_evidence(
+                evidence,
+                name,
+                args,
+                result
+            )
 
             result_status = result['status']
 
@@ -416,12 +461,13 @@ def run_agent(
                 )
 
             model_result = {
+                'evidence_id': event['id'],
                 'tool': result['tool'],
                 'status': result['status'],
                 'exit_code': result['exit_code'],
                 'stdout': result['stdout'],
                 'stderr': result['stderr'],
-                'error': result['error']
+                'error': result['error'],
             }
 
             messages.append({
@@ -540,12 +586,137 @@ def safe_write_report(
         if os.path.exists(tmp_name):
             os.unlink(tmp_name)
 
+def validate_evidence_references(
+    text: str,
+    events: list[dict]
+) -> bool:
+
+    available = {
+        event['id']
+        for event in events
+    }
+
+    referenced = set(
+        EVIDENCE_REF_RE.findall(text)
+    )
+
+    return referenced <= available
+
+def get_repo_sha(
+    workspace: Path
+) -> str:
+
+    try:
+        result = subprocess.run(
+            [
+                'git',
+                'rev-parse',
+                'HEAD'
+            ],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True
+        )
+
+        return result.stdout.strip()
+
+    except (
+        subprocess.SubprocessError,
+        OSError
+    ):
+        return 'unavailable'
+
+def save_evidence_journal(
+    result: AgentResult,
+    output: Path,
+    workspace: Path,
+    skill_name: str,
+    allow_exec: bool
+) -> None:
+
+    if output.exists():
+        try:
+            old = json.loads(
+                output.read_text(
+                    encoding='utf-8'
+                )
+            )
+
+            old_session = (
+                old
+                .get('session', {})
+                .get('id')
+            )
+
+        except (
+            json.JSONDecodeError,
+            OSError
+        ):
+            raise ValueError(
+                'Existing evidence journal is invalid'
+            )
+
+        if old_session != result.session_id:
+            raise FileExistsError(
+                'Evidence journal belongs to another session'
+            )
+
+    data = {
+        'session': {
+            'id': result.session_id,
+            'repo_sha': get_repo_sha(workspace),
+            'provider': result.provider,
+            'model': result.model,
+            'skill': skill_name,
+            'allow_exec': allow_exec,
+            'program_version': PROGRAM_VERSION
+        },
+        'evidence': []
+    }
+
+    for event in result.events:
+        tool_result = event['result']
+
+        data['evidence'].append({
+            'id': event['id'],
+            'tool': event['tool'],
+            'arguments': event['arguments'],
+            'status': tool_result['status'],
+            'exit_code': tool_result['exit_code'],
+            'duration_ms': tool_result['duration_ms'],
+            'truncated': tool_result['truncated'],
+            'error': tool_result['error'],
+            'sha256': event['sha256'],
+            'stdout': tool_result['stdout'],
+            'stderr': tool_result['stderr']
+        })
+
+    safe_write_report(
+        output,
+        json.dumps(
+            data,
+            indent=2,
+            ensure_ascii=False
+        ),
+        workspace,
+        '.json'
+    )
+    
 def save_report(
     result: AgentResult,
     output: Path,
     workspace: Path,
     skill_name: str
 ) -> None:
+    if not validate_evidence_references(
+        result.report,
+        result.events
+    ):
+        raise ValueError(
+            'Report references unknown evidence ID'
+        )
 
     lines = [
         '# AI Job Processing Engineer: investigation report',
@@ -559,6 +730,7 @@ def save_report(
         '- Reason: `' + result.termination_reason + '`',
         '- Steps: `' + str(result.steps) + '`',
         '- Tool calls: `' + str(result.tool_calls) + '`',
+        '- Session: `' + result.session_id + '`',
         '',
         '## Conclusion',
         '',
@@ -617,13 +789,18 @@ def save_report(
 
     for i, event in enumerate(result.events, 1):
         lines += [
-            f'### {i}. `{event["tool"]}`',
+            '### '
+            + event['id']
+            + ' — `'
+            + event['tool']
+            + '`',
             '',
             '```json',
             json.dumps(
                 {
                     'arguments': event['arguments'],
-                    'result': event['result']
+                    'result': event['result'],
+                    'sha256': event['sha256']
                 },
                 indent=2,
                 ensure_ascii=False
@@ -664,6 +841,8 @@ def save_json_report(
         'events': result.events,
 
         'verification_status': result.verification_status,
+
+        'session_id': result.session_id
     }
 
     safe_write_report(

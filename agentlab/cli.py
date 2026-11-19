@@ -8,6 +8,7 @@ from .runner import (
     run_agent,
     save_report,
     save_json_report,
+    save_evidence_journal,
     validate_report_path
 )
 
@@ -153,6 +154,20 @@ def main(argv=None) -> int:
             max_steps=args.max_steps
         )
 
+        evidence_path = (
+            workspace
+            / 'reports'
+            / f'evidence-{result.session_id}.json'
+        )
+
+        save_evidence_journal(
+            result,
+            evidence_path,
+            workspace,
+            args.skill,
+            args.allow_exec
+        )
+
         save_report(
             result,
             report_path,
@@ -177,7 +192,7 @@ def main(argv=None) -> int:
     print(f'Reason: {result.termination_reason}')
     print(f'Steps: {result.steps}')
     print(f'Tool calls: {len(result.events)}')
-
+    print( f'Evidence: {evidence_path.resolve()}')
     for event in result.events:
         print(f'  {event["tool"]}: exit={event["result"].get("exit_code", "n/a")}')
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agentlab.providers import MockProvider, OllamaProvider
-from agentlab.runner import run_agent, save_report, get_verification_status
+from agentlab.runner import run_agent, save_report, get_verification_status, save_evidence_journal, validate_evidence_references
 from agentlab.skill_loader import load_skill
 from agentlab.tools import (
     ToolExecutor,
@@ -1560,6 +1560,171 @@ class AgentTest(BaseCase):
             agent.termination_reason,
             'unexpected_error'
         )
+
+    def test_evidence_journal_ids_and_references(self):
+        class Provider:
+            def chat(self, messages, tools):
+                return {
+                    'content': '',
+                    'tool_calls': [
+                        {
+                            'function': {
+                                'name': 'tool_one',
+                                'arguments': {}
+                            }
+                        },
+                        {
+                            'function': {
+                                'name': 'tool_two',
+                                'arguments': {}
+                            }
+                        },
+                        {
+                            'function': {
+                                'name': 'tool_three',
+                                'arguments': {}
+                            }
+                        }
+                    ]
+                }
+
+        results = [
+            make_tool_result(
+                'tool_one',
+                {},
+                'COMMAND_FAILED',
+                exit_code=1,
+                stderr='first error',
+                duration_ms=10
+            ),
+            make_tool_result(
+                'tool_two',
+                {},
+                'COMMAND_FAILED',
+                exit_code=2,
+                stderr='second error',
+                duration_ms=20
+            ),
+            make_tool_result(
+                'tool_three',
+                {},
+                'DENIED',
+                error='Execution denied',
+                duration_ms=1
+            )
+        ]
+
+        with patch(
+            'agentlab.runner.ToolExecutor.execute',
+            side_effect=results
+        ):
+            agent = run_agent(
+                ROOT,
+                self.ws,
+                'job-processing-triage',
+                Provider()
+            )
+
+        self.assertEqual(
+            [event['id'] for event in agent.events],
+            [
+                'EVID-001',
+                'EVID-002',
+                'EVID-003'
+            ]
+        )
+
+        self.assertEqual(
+            agent.events[2]['result']['status'],
+            'DENIED'
+        )
+
+        journal = (
+            self.ws
+            / 'reports'
+            / 'evidence.json'
+        )
+
+        save_evidence_journal(
+            agent,
+            journal,
+            self.ws,
+            'job-processing-triage',
+            False
+        )
+
+        saved = json.loads(
+            journal.read_text(
+                encoding='utf-8'
+            )
+        )
+
+        self.assertEqual(
+            [
+                item['id']
+                for item in saved['evidence']
+            ],
+            [
+                'EVID-001',
+                'EVID-002',
+                'EVID-003'
+            ]
+        )
+
+        self.assertEqual(
+            saved['session']['id'],
+            agent.session_id
+        )
+
+        self.assertTrue(
+            validate_evidence_references(
+                'See EVID-001 and EVID-003',
+                agent.events
+            )
+        )
+
+        self.assertFalse(
+            validate_evidence_references(
+                'See EVID-999',
+                agent.events
+            )
+        )
+
+    def test_evidence_journal_rejects_other_session(self):
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            MockProvider(),
+            max_steps=1
+        )
+
+        journal = (
+            self.ws
+            / 'reports'
+            / 'evidence.json'
+        )
+
+        save_evidence_journal(
+            agent,
+            journal,
+            self.ws,
+            'job-processing-triage',
+            False
+        )
+
+        agent.session_id = 'another-session'
+
+        with self.assertRaises(
+            FileExistsError
+        ):
+            save_evidence_journal(
+                agent,
+                journal,
+                self.ws,
+                'job-processing-triage',
+                False
+            )
 
 class ProviderTest(unittest.TestCase):
     def test_local_host_and_tools(self):
