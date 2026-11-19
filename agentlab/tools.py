@@ -1160,22 +1160,67 @@ class ToolExecutor:
                 return self.git_show(args)
 
             if name == 'git_diff':
-                return self.run_cmd(
+                paths = [
+                    'src',
+                    'include',
+                    'tests',
+                    'app',
+                    'CMakeLists.txt'
+                ]
+
+                unstaged = self.run_cmd(
                     [
                         'git',
                         'diff',
                         '--no-ext-diff',
                         '--',
-                        'src',
-                        'include',
-                        'tests',
-                        'app',
-                        'CMakeLists.txt'
+                        *paths
                     ],
                     20,
                     name,
                     args
                 )
+
+                staged = self.run_cmd(
+                    [
+                        'git',
+                        'diff',
+                        '--cached',
+                        '--no-ext-diff',
+                        '--',
+                        *paths
+                    ],
+                    20,
+                    name,
+                    args
+                )
+
+                ok = (
+                    unstaged['status'] == 'OK'
+                    and staged['status'] == 'OK'
+                )
+
+                return make_tool_result(
+                    name,
+                    args,
+                    'OK' if ok else 'COMMAND_FAILED',
+                    exit_code=0 if ok else 1,
+                    stdout=json.dumps(
+                        {
+                            'unstaged': unstaged['stdout'],
+                            'staged': staged['stdout']
+                        },
+                        ensure_ascii=False
+                    ),
+                    stderr=(
+                        unstaged['stderr']
+                        + staged['stderr']
+                    ),
+                    truncated=(
+                        unstaged['truncated']
+                        or staged['truncated']
+                    )
+    )
 
             if name == 'git_log':
                 return self.run_cmd(

@@ -965,6 +965,92 @@ class GitToolsTest(unittest.TestCase):
             'INVALID_ARGUMENTS'
         )
 
+    def test_git_diff_includes_staged_change(self):
+        path = (
+            self.ws
+            / 'src'
+            / 'example.cpp'
+        )
+
+        path.write_text(
+            'int value = 2;\n',
+            encoding='utf-8'
+        )
+
+        self.git(
+            'add',
+            'src/example.cpp'
+        )
+
+        result = self.executor.execute(
+            'git_diff',
+            {}
+        )
+
+        self.assertEqual(
+            result['status'],
+            'OK'
+        )
+
+        data = json.loads(
+            result['stdout']
+        )
+
+        self.assertEqual(
+            data['unstaged'],
+            ''
+        )
+
+        self.assertIn(
+            'src/example.cpp',
+            data['staged']
+        )
+
+        self.assertIn(
+            'int value = 2;',
+            data['staged']
+        )
+    def test_git_diff_separates_unstaged_and_staged(self):
+        path = (
+            self.ws
+            / 'src'
+            / 'example.cpp'
+        )
+
+        path.write_text(
+            'int value = 2;\n',
+            encoding='utf-8'
+        )
+
+        self.git(
+            'add',
+            'src/example.cpp'
+        )
+
+        path.write_text(
+            'int value = 3;\n',
+            encoding='utf-8'
+        )
+
+        result = self.executor.execute(
+            'git_diff',
+            {}
+        )
+
+        data = json.loads(
+            result['stdout']
+        )
+
+        self.assertIn(
+            'int value = 2;',
+            data['staged']
+        )
+
+        self.assertIn(
+            'int value = 3;',
+            data['unstaged']
+        )
+
 class SkillTest(unittest.TestCase):
     def test_skill_loaded(self):
         text = load_skill(ROOT / 'skills', 'job-processing-triage')
