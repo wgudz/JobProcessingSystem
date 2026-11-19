@@ -18,7 +18,9 @@ from agentlab.runner import (
     AgentResult,
     COMPLETED,
     VERIFICATION_PASSED,
-    save_json_report
+    save_json_report,
+    create_analysis_plan,
+    plan_is_complete
     
 )
 from agentlab.skill_loader import load_skill
@@ -47,6 +49,308 @@ class BaseCase(unittest.TestCase):
         (self.ws / 'src/statistics.cpp').write_text('++cancelled_;\n')
         (self.ws / 'include/job_system/thread_safe_queue.h').write_text('template<class T> class ThreadSafeQueue {};\n')
         (self.ws / 'tests/thread_safe_queue_test.cpp').write_text('int main(){return 0;}\n')
+
+class AnalysisPlanTest(BaseCase):
+
+    def test_two_issues_have_different_scope(self):
+        test_map = {
+            'thread_safe_queue': [
+                'thread_safe_queue_test'
+            ],
+            'statistics': [
+                'statistics_test'
+            ],
+            'worker_pool': [
+                'worker_pool_test'
+            ]
+        }
+
+        first = {
+            'title': 'Queue regression',
+            'symptoms': 'thread_safe_queue problem',
+            'expected': 'queue works',
+            'suspected_tests': []
+        }
+
+        second = {
+            'title': 'Statistics and worker pool regression',
+            'symptoms': (
+                'statistics and worker_pool '
+                'both look incorrect'
+            ),
+            'expected': 'both modules work',
+            'suspected_tests': []
+        }
+
+        plan_one = create_analysis_plan(
+            first,
+            test_map,
+            True
+        )
+
+        plan_two = create_analysis_plan(
+            second,
+            test_map,
+            True
+        )
+
+        tests_one = [
+            step['arguments']['tests'][0]
+            for step in plan_one
+            if step['tool']
+            == 'run_selected_tests'
+        ]
+
+        tests_two = [
+            step['arguments']['tests'][0]
+            for step in plan_two
+            if step['tool']
+            == 'run_selected_tests'
+        ]
+
+        self.assertEqual(
+            tests_one,
+            ['thread_safe_queue_test']
+        )
+
+        self.assertIn(
+            'statistics_test',
+            tests_two
+        )
+
+        self.assertIn(
+            'worker_pool_test',
+            tests_two
+        )
+
+
+    def test_without_allow_exec_tests_are_skipped(self):
+        issue = {
+            'title': 'Queue regression',
+            'symptoms': 'thread_safe_queue',
+            'expected': 'queue works',
+            'suspected_tests': [
+                'thread_safe_queue_test'
+            ]
+        }
+
+        plan = create_analysis_plan(
+            issue,
+            {
+                'thread_safe_queue': [
+                    'thread_safe_queue_test'
+                ]
+            },
+            False
+        )
+
+        selected = [
+            step
+            for step in plan
+            if step['tool']
+            == 'run_selected_tests'
+        ]
+
+        self.assertEqual(
+            selected[0]['status'],
+            'SKIPPED'
+        )
+
+        self.assertIn(
+            'not confirmed',
+            selected[0]['skip_reason']
+        )
+
+
+    def test_max_steps_one_keeps_plan(self):
+        class Provider:
+            def chat(self, messages, tools):
+                return {
+                    'content': '',
+                    'tool_calls': [{
+                        'function': {
+                            'name': 'list_files',
+                            'arguments': {}
+                        }
+                    }]
+                }
+
+        agent = run_agent(
+            ROOT,
+            self.ws,
+            'job-processing-triage',
+            Provider(),
+            max_steps=1
+        )
+
+        self.assertEqual(
+            agent.status,
+            'BLOCKED'
+        )
+
+        self.assertEqual(
+            agent.termination_reason,
+            'max_steps_reached'
+        )
+
+        self.assertTrue(agent.plan)
+
+        self.assertTrue(
+            agent.plan_history
+        )
+
+
+    def test_failed_test_reorders_plan(self):
+        issue = {
+            'title': 'Two failing modules',
+            'symptoms': (
+                'thread_safe_queue and statistics'
+            ),
+            'expected': 'both tests pass',
+            'suspected_tests': [
+                'thread_safe_queue_test',
+                'statistics_test'
+            ]
+        }
+
+        class Provider:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, messages, tools):
+                self.calls += 1
+
+                if self.calls == 1:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'run_selected_tests',
+                                'arguments': {
+                                    'tests': [
+                                        'thread_safe_queue_test'
+                                    ]
+                                }
+                            }
+                        }]
+                    }
+
+                if self.calls == 2:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'search_code',
+                                'arguments': {
+                                    'query': 'thread_safe_queue'
+                                }
+                            }
+                        }]
+                    }
+
+                return {
+                    'content': (
+                        '## Facts\n'
+                        '- Test failed EVID-001\n'
+                        '- Code inspected EVID-002\n'
+                        '## Hypotheses\n'
+                        'Queue regression.\n'
+                        '## Minimal fix\n'
+                        'Inspect minimal queue change.\n'
+                        '## Test plan\n'
+                        'Re-run selected tests.\n'
+                        '## Risks\n'
+                        'Other module remains unconfirmed.\n'
+                        '## Final result\n'
+                        'Analysis completed.'
+                    )
+                }
+
+        fake_results = [
+            make_tool_result(
+                'run_selected_tests',
+                {
+                    'tests': [
+                        'thread_safe_queue_test'
+                    ]
+                },
+                'COMMAND_FAILED',
+                exit_code=8,
+                stdout='FAILED'
+            ),
+            make_tool_result(
+                'search_code',
+                {
+                    'query': 'thread_safe_queue'
+                },
+                'OK',
+                exit_code=0,
+                stdout='{"count": 1}'
+            )
+        ]
+
+        with patch(
+            'agentlab.runner.ToolExecutor.execute',
+            side_effect=fake_results
+        ):
+            agent = run_agent(
+                ROOT,
+                self.ws,
+                'job-processing-triage',
+                Provider(),
+                issue_id='BUG-110',
+                issue=issue,
+                allow_exec=True
+            )
+
+        self.assertEqual(
+            agent.events[0]['result']['status'],
+            'COMMAND_FAILED'
+        )
+
+        revisions = agent.plan_history
+
+        self.assertGreaterEqual(
+            len(revisions),
+            3
+        )
+
+        reordered = revisions[-1]['plan']
+
+        search_index = next(
+            i
+            for i, step in enumerate(reordered)
+            if step['tool'] == 'search_code'
+        )
+
+        statistics_index = next(
+            i
+            for i, step in enumerate(reordered)
+            if (
+                step['tool']
+                == 'run_selected_tests'
+                and step['arguments']['tests']
+                == ['statistics_test']
+            )
+        )
+
+        self.assertLess(
+            search_index,
+            statistics_index
+        )
+
+        self.assertEqual(
+            agent.tool_calls,
+            2
+        )
+
+        self.assertNotIn(
+            'run_ctest',
+            [
+                event['tool']
+                for event in agent.events
+            ]
+        )
 
 class ReportFormatTest(BaseCase):
     def make_event(
@@ -1589,6 +1893,14 @@ class AgentTest(BaseCase):
         self.assertEqual(
             agent.verification_status,
             'FAILED'
+        )
+
+        self.assertTrue(
+            any(
+                step['status'] == 'SKIPPED'
+                for step in agent.plan
+                if step['tool'] == 'run_ctest'
+            )
         )
 
     def test_real_ctest_result_marks_verification_passed(self):

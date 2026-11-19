@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +19,7 @@ import re
 import hashlib
 import uuid
 import subprocess
+import copy
 
 SYSTEM = '''You are a cautious senior C++20 engineer investigating JobProcessingSystem.
 Do not invent execution, test results, commits, line numbers, or root causes.
@@ -64,6 +65,13 @@ class AgentResult:
     verification_status: str
     session_id: str
     repo_head: str = ''
+    plan: list[dict] = field(
+        default_factory=list
+    )
+
+    plan_history: list[dict] = field(
+        default_factory=list
+    )
 
 def get_verification_status(
     evidence: list[dict]
@@ -173,6 +181,298 @@ def add_evidence(
 
     return event
 
+def create_analysis_plan(
+    issue: dict | None,
+    test_map: dict,
+    allow_exec: bool
+) -> list[dict]:
+
+    selected_tests = []
+    issue_text = ''
+
+    if issue:
+        issue_text = ' '.join([
+            str(issue.get('title', '')),
+            str(issue.get('symptoms', '')),
+            str(issue.get('expected', ''))
+        ]).lower()
+
+        for test in (
+            issue.get('suspected_tests')
+            or []
+        ):
+            if (
+                isinstance(test, str)
+                and test
+                and test not in selected_tests
+            ):
+                selected_tests.append(test)
+
+    matched_fragments = []
+
+    for fragment, tests in test_map.items():
+        if fragment.lower() in issue_text:
+            matched_fragments.append(fragment)
+
+            for test in tests:
+                if test not in selected_tests:
+                    selected_tests.append(test)
+
+    if matched_fragments:
+        search_query = matched_fragments[0]
+
+    elif selected_tests:
+        search_query = (
+            selected_tests[0]
+            .removesuffix('_test')
+        )
+
+    else:
+        search_query = 'Job'
+
+    plan = []
+
+    def add_step(
+        tool,
+        arguments,
+        purpose,
+        decisive_result,
+        fallback,
+        required=True,
+        expensive=False,
+        status='PENDING',
+        skip_reason=None
+    ):
+        step = {
+            'id': (
+                f'PLAN-{len(plan) + 1:03d}'
+            ),
+            'tool': tool,
+            'arguments': arguments,
+            'purpose': purpose,
+            'decisive_result': decisive_result,
+            'fallback': fallback,
+            'required': required,
+            'expensive': expensive,
+            'status': status
+        }
+
+        if skip_reason:
+            step['skip_reason'] = skip_reason
+
+        plan.append(step)
+
+    add_step(
+        'git_status',
+        {},
+        'Confirm repository HEAD and working tree.',
+        'Repository state is known before diagnosis.',
+        'Continue with available evidence and report missing Git context.'
+    )
+
+    for test in selected_tests:
+        if allow_exec:
+            status = 'PENDING'
+            skip_reason = None
+        else:
+            status = 'SKIPPED'
+            skip_reason = (
+                'Execution not allowed; '
+                'test conclusion not confirmed.'
+            )
+
+        add_step(
+            'run_selected_tests',
+            {
+                'tests': [test]
+            },
+            (
+                'Check whether '
+                + test
+                + ' reproduces the issue.'
+            ),
+            (
+                'The selected test either '
+                'passes or reproduces the failure.'
+            ),
+            (
+                'Inspect relevant code before '
+                'running more tests.'
+            ),
+            status=status,
+            skip_reason=skip_reason
+        )
+
+    add_step(
+        'search_code',
+        {
+            'query': search_query
+        },
+        'Locate code related to the reported module.',
+        'Relevant source or test locations are found.',
+        (
+            'Use other read-only evidence and '
+            'mark the conclusion as unconfirmed.'
+        )
+    )
+
+    add_step(
+        'run_ctest',
+        {},
+        'Perform full verification.',
+        'Full CTest result is available.',
+        (
+            'Keep the conclusion unconfirmed '
+            'and record the limitation.'
+        ),
+        required=False,
+        expensive=True,
+        status='SKIPPED',
+        skip_reason=(
+            'Deferred until a fix is applied; '
+            'the proposed fix is not confirmed.'
+        )
+    )
+
+    return plan
+
+def record_plan_revision(
+    plan: list[dict],
+    history: list[dict],
+    reason: str
+) -> None:
+
+    history.append({
+        'revision': len(history) + 1,
+        'reason': reason,
+        'plan': copy.deepcopy(plan)
+    })
+
+
+def update_plan_from_event(
+    plan: list[dict],
+    event: dict
+) -> bool:
+
+    for step in plan:
+        if step['tool'] != event['tool']:
+            continue
+
+        if (
+            step['tool']
+            == 'run_selected_tests'
+        ):
+            planned_tests = (
+                step['arguments']
+                .get('tests', [])
+            )
+
+            actual_tests = (
+                event['arguments']
+                .get('tests', [])
+            )
+
+            if planned_tests != actual_tests:
+                continue
+
+        result_status = (
+            event['result']['status']
+        )
+
+        if result_status == 'OK':
+            step['status'] = 'DONE'
+
+        elif result_status == 'DENIED':
+            step['status'] = 'SKIPPED'
+            step['skip_reason'] = (
+                event['result']['error']
+                or 'Execution denied.'
+            )
+
+        else:
+            step['status'] = 'FAILED'
+
+        step['evidence_id'] = event['id']
+
+        return True
+
+    return False
+
+
+def revise_plan_after_failed_test(
+    plan: list[dict]
+) -> bool:
+
+    search_index = None
+
+    for i, step in enumerate(plan):
+        if (
+            step['tool'] == 'search_code'
+            and step['status'] == 'PENDING'
+        ):
+            search_index = i
+            break
+
+    if search_index is None:
+        return False
+
+    next_test_index = None
+
+    for i, step in enumerate(plan):
+        if (
+            step['tool']
+            == 'run_selected_tests'
+            and step['status'] == 'PENDING'
+        ):
+            next_test_index = i
+            break
+
+    if (
+        next_test_index is None
+        or search_index < next_test_index
+    ):
+        return False
+
+    search_step = plan.pop(search_index)
+
+    plan.insert(
+        next_test_index,
+        search_step
+    )
+
+    return True
+
+
+def plan_is_complete(
+    plan: list[dict]
+) -> bool:
+
+    required = [
+        step
+        for step in plan
+        if step.get('required', True)
+    ]
+
+    if not required:
+        return False
+
+    terminal = {
+        'DONE',
+        'FAILED',
+        'SKIPPED'
+    }
+
+    if not all(
+        step['status'] in terminal
+        for step in required
+    ):
+        return False
+
+    return any(
+        step.get('evidence_id')
+        for step in required
+    )
+
 def run_agent(
     project_root: Path,
     workspace: Path,
@@ -207,6 +507,20 @@ def run_agent(
         ).read_text(
             encoding='utf-8'
         )
+    )
+
+    plan = create_analysis_plan(
+        issue,
+        test_map,
+        allow_exec
+    )
+
+    plan_history = []
+
+    record_plan_revision(
+        plan,
+        plan_history,
+        'Initial plan created from issue and test mapping.'
     )
     
     executor = ToolExecutor(
@@ -270,6 +584,15 @@ def run_agent(
                 + '\n## Final result'
                 + '\nEvery fact about source code or tests must cite '
                 + 'at least one existing EVID-* identifier.'
+                + '\n\nAnalysis plan prepared by the application:\n'
+                + json.dumps(
+                    plan,
+                    ensure_ascii=False
+                )
+                + '\nThe plan is guidance, not evidence.'
+                + '\nTool call budget: '
+                + str(MAX_TOOL_CALLS)
+                + '.'
             )
         }
     ]
@@ -280,6 +603,17 @@ def run_agent(
     steps = 0
     tool_calls = 0
 
+    def finish(*args):
+        result = make_result(*args)
+
+        result.plan = copy.deepcopy(plan)
+
+        result.plan_history = copy.deepcopy(
+            plan_history
+        )
+
+        return result
+
     last_call = None
     repeated_calls = 0
 
@@ -287,13 +621,19 @@ def run_agent(
         steps += 1
 
         try:
+            available_tools = (
+                []
+                if plan_is_complete(plan)
+                else TOOL_SCHEMAS
+            )
+
             response = provider.chat(
                 messages,
-                TOOL_SCHEMAS
+                available_tools
             )
 
         except RuntimeError as exc:
-            return make_result(
+            return finish(
                 f'Provider unavailable: {exc}',
                 evidence,
                 provider,
@@ -304,7 +644,7 @@ def run_agent(
             )
 
         except Exception as exc:
-            return make_result(
+            return finish(
                 f'Unexpected agent error: {exc}',
                 evidence,
                 provider,
@@ -315,8 +655,23 @@ def run_agent(
             )
 
         calls = response.get('tool_calls') or []
+
+        if (
+            plan_is_complete(plan)
+            and calls
+        ):
+            return finish(
+                'Analysis plan already has sufficient evidence.',
+                evidence,
+                provider,
+                BLOCKED,
+                'plan_complete',
+                steps,
+                tool_calls
+            )
+
         if len(calls) > MAX_TOOL_CALLS - tool_calls:
-            return make_result(
+            return finish(
                 'Tool execution budget exceeded.',
                 evidence,
                 provider,
@@ -338,7 +693,7 @@ def run_agent(
             status = ANALYZING
 
             if not content.strip():
-                return make_result(
+                return finish(
                     'Model returned no final answer.',
                     evidence,
                     provider,
@@ -350,7 +705,7 @@ def run_agent(
 
             # Nie pozwalamy ogłosić sukcesu bez żadnego dowodu
             if not evidence:
-                return make_result(
+                return finish(
                     content,
                     evidence,
                     provider,
@@ -360,7 +715,7 @@ def run_agent(
                     tool_calls
                 )
 
-            return make_result(
+            return finish(
                 content,
                 evidence,
                 provider,
@@ -383,7 +738,7 @@ def run_agent(
                 try:
                     args = json.loads(args)
                 except json.JSONDecodeError:
-                    return make_result(
+                    return finish(
                         'Invalid tool arguments.',
                         evidence,
                         provider,
@@ -394,7 +749,7 @@ def run_agent(
                     )
 
             if not isinstance(args, dict):
-                return make_result(
+                return finish(
                     'Invalid tool arguments.',
                     evidence,
                     provider,
@@ -416,6 +771,52 @@ def run_agent(
                 result
             )
 
+            plan_changed = update_plan_from_event(
+                plan,
+                event
+            )
+
+            if plan_changed:
+                record_plan_revision(
+                    plan,
+                    plan_history,
+                    (
+                        event['id']
+                        + ': '
+                        + name
+                        + ' -> '
+                        + result['status']
+                    )
+                )
+
+            if (
+                name == 'run_selected_tests'
+                and result['status']
+                == 'COMMAND_FAILED'
+            ):
+                if revise_plan_after_failed_test(
+                    plan
+                ):
+                    record_plan_revision(
+                        plan,
+                        plan_history,
+                        (
+                            event['id']
+                            + ': selected test failed; '
+                            'inspect code before more tests.'
+                        )
+                    )
+            if plan_is_complete(plan):
+                messages.append({
+                    'role': 'system',
+                    'content': (
+                        'The planned evidence is sufficient. '
+                        'Do not request more tools. '
+                        'Produce the final answer. '
+                        'Skipped tests remain unconfirmed.'
+                    )
+                })
+
             result_status = result['status']
 
             if result_status in (
@@ -428,7 +829,7 @@ def run_agent(
                     evidence
                 )
                 
-                return make_result(
+                return finish(
                     result['error'],
                     evidence,
                     provider,
@@ -460,7 +861,7 @@ def run_agent(
                 last_call = current_call
 
             if repeated_calls >= MAX_REPEATED_CALLS:
-                return make_result(
+                return finish(
                     'Same tool call repeated without new information.',
                     evidence,
                     provider,
@@ -490,7 +891,7 @@ def run_agent(
             })
 
     # Pętla się skończyła przez max_steps
-    return make_result(
+    return finish(
         f'Analysis incomplete: max_steps={max_steps} reached.',
         evidence,
         provider,
@@ -781,6 +1182,22 @@ def build_limitations(
             )
             break
 
+    for step in result.plan:
+        if (
+            step.get('status') == 'SKIPPED'
+            and step.get('expensive')
+        ):
+            limitation = (
+                'Expensive test skipped: '
+                + step['tool']
+                + '. Conclusion not confirmed.'
+            )
+
+            if limitation not in limitations:
+                limitations.append(
+                    limitation
+                )
+    
     return limitations
 
 def get_result_repo_head(
@@ -907,7 +1324,22 @@ def build_report_data(
         ),
         'limitations': build_limitations(
             result
-        )
+        ),
+
+        'plan': result.plan,
+
+        'plan_history': result.plan_history,
+
+        'executed_flow': [
+            {
+                'id': event['id'],
+                'tool': event['tool'],
+                'status': (
+                    event['result']['status']
+                )
+            }
+            for event in result.events
+        ],
     }
 
 def validate_machine_report(
@@ -1020,10 +1452,80 @@ def save_report(
         + verification['fix_status']
         + '`',
         '',
+        '- Tool call budget: `'
+        + str(MAX_TOOL_CALLS)
+        + '`',
+        '',
+
+        '### Analysis plan',
+        ''
 
         '### Evidence',
         ''
     ]
+
+    for step in result.plan:
+        text = (
+            '- '
+            + step['id']
+            + ': `'
+            + step['tool']
+            + '` — '
+            + step['purpose']
+            + ' | decisive: '
+            + step['decisive_result']
+            + ' | fallback: '
+            + step['fallback']
+            + ' | status: `'
+            + step['status']
+            + '`'
+        )
+
+        if step.get('skip_reason'):
+            text += (
+                ' | skipped: '
+                + step['skip_reason']
+            )
+
+        lines.append(text)
+
+    lines += [
+        '',
+        '### Plan history',
+        ''
+    ]
+
+    for revision in result.plan_history:
+        order = ' -> '.join(
+            step['tool']
+            for step in revision['plan']
+        )
+
+        lines.append(
+            '- Revision '
+            + str(revision['revision'])
+            + ': '
+            + revision['reason']
+            + ' | '
+            + order
+        )
+
+    lines += [
+        '',
+        '### Executed flow',
+        ''
+    ]
+
+    for event in result.events:
+        lines.append(
+            '- '
+            + event['id']
+            + ': `'
+            + event['tool']
+            + '` — `'
+            + event['result']['status']
+            + '`'
+        )
 
     for event in result.events:
         lines.append(
