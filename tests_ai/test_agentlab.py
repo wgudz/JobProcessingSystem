@@ -1395,6 +1395,50 @@ class AgentTest(BaseCase):
             get_verification_status(evidence),
             'FAILED'
         )
+    def test_tool_call_budget_blocks_before_execution(self):
+        class Provider:
+            def chat(self, messages, tools):
+                return {
+                    'content': '',
+                    'tool_calls': [
+                        {
+                            'function': {
+                                'name': 'list_files',
+                                'arguments': {}
+                            }
+                        }
+                        for _ in range(42)
+                    ]
+                }
+
+        with patch(
+            'agentlab.runner.ToolExecutor.execute'
+        ) as execute:
+
+            agent = run_agent(
+                ROOT,
+                self.ws,
+                'job-processing-triage',
+                Provider(),
+                max_steps=1
+            )
+
+        self.assertEqual(
+            agent.status,
+            'BLOCKED'
+        )
+
+        self.assertEqual(
+            agent.termination_reason,
+            'tool_budget_exceeded'
+        )
+
+        self.assertEqual(
+            agent.tool_calls,
+            0
+        )
+
+        execute.assert_not_called()
 
 class ProviderTest(unittest.TestCase):
     def test_local_host_and_tools(self):

@@ -35,6 +35,7 @@ BLOCKED = 'BLOCKED'
 FAILED = 'FAILED'
 
 MAX_REPEATED_CALLS = 3
+MAX_TOOL_CALLS = 24
 
 VERIFICATION_NOT_RUN = 'NOT_RUN'
 VERIFICATION_PASSED = 'PASSED'
@@ -248,6 +249,16 @@ def run_agent(
             )
 
         calls = response.get('tool_calls') or []
+        if len(calls) > MAX_TOOL_CALLS - tool_calls:
+            return make_result(
+                'Tool execution budget exceeded.',
+                evidence,
+                provider,
+                BLOCKED,
+                'tool_budget_exceeded',
+                steps,
+                tool_calls
+            )
         content = response.get('content') or ''
 
         messages.append({
