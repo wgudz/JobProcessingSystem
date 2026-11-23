@@ -23,7 +23,7 @@ from agentlab.runner import (
     plan_is_complete
     
 )
-from agentlab.skill_loader import load_skill
+from agentlab.skill_loader import load_skill, load_skill_references
 from agentlab.tools import (
     ToolExecutor,
     TOOL_SCHEMAS,
@@ -160,7 +160,45 @@ class AnalysisPlanTest(BaseCase):
             'not confirmed',
             selected[0]['skip_reason']
         )
+    def test_regression_triage_plan_reads_test_and_diff(self):
+        issue = {
+            'title': 'Queue regression',
+            'symptoms': 'thread_safe_queue_test fails',
+            'expected': 'queue works',
+            'suspected_tests': [
+                'thread_safe_queue_test'
+            ]
+        }
 
+        plan = create_analysis_plan(
+            issue,
+            {
+                'thread_safe_queue': [
+                    'thread_safe_queue_test'
+                ]
+            },
+            True,
+            'job-regression-triage'
+        )
+
+        reads = [
+            step
+            for step in plan
+            if step['tool'] == 'read_file'
+        ]
+
+        self.assertEqual(
+            reads[0]['arguments']['path'],
+            'tests/thread_safe_queue_test.cpp'
+        )
+
+        self.assertIn(
+            'git_diff',
+            [
+                step['tool']
+                for step in plan
+            ]
+        )
 
     def test_max_steps_one_keeps_plan(self):
         class Provider:
@@ -1523,6 +1561,469 @@ class SkillTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_skill(Path(temp), 'wrong')
 
+    def test_regression_triage_skill_loaded(self):
+        text = load_skill(
+            ROOT / 'skills',
+            'job-regression-triage'
+        )
+
+        self.assertIn(
+            'name: job-regression-triage',
+            text
+        )
+
+        self.assertIn(
+            'git_status',
+            text
+        )
+
+        self.assertIn(
+            'Minimal reproducing test',
+            text
+        )
+
+        self.assertIn(
+            'Full CTest',
+            text
+        )
+
+        self.assertIn(
+            'Facts and hypotheses',
+            text
+        )
+
+    def test_skill_without_references(self):
+        text = load_skill_references(
+            ROOT / 'skills',
+            'job-regression-triage'
+        )
+
+        self.assertEqual(
+            text,
+            ''
+        )
+
+class RegressionTriageSkillTest(BaseCase):
+
+    def run_incident(
+        self,
+        issue_id,
+        issue,
+        query,
+        expected_paths,
+        report_name
+    ):
+        test_path = next(
+            path
+            for path in expected_paths
+            if path.startswith('tests/')
+        )
+
+        class Provider:
+            model = 'skill-test'
+
+            def __init__(self):
+                self.calls = 0
+                self.first_messages = None
+
+            def chat(self, messages, tools):
+                self.calls += 1
+
+                if self.first_messages is None:
+                    self.first_messages = list(messages)
+
+                if self.calls == 1:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'git_status',
+                                'arguments': {}
+                            }
+                        }]
+                    }
+
+                if self.calls == 2:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'read_file',
+                                'arguments': {
+                                    'path': test_path
+                                }
+                            }
+                        }]
+                    }
+
+                if self.calls == 3:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'search_code',
+                                'arguments': {
+                                    'query': query
+                                }
+                            }
+                        }]
+                    }
+
+                if self.calls == 4:
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': 'git_diff',
+                                'arguments': {}
+                            }
+                        }]
+                    }
+
+                return {
+                    'content': (
+                        '## Facts\n'
+                        'Symptom: relevant code was located EVID-003\n'
+                        'Reproduction: focused CTest was not executed; '
+                        'the regression remains unconfirmed EVID-002\n'
+                        'Evidence: repository locations were found EVID-003\n'
+                        '## Hypotheses\n'
+                        'Mechanism: requires correlation with a failing test.\n'
+                        '## Minimal fix\n'
+                        'Proposed fix: no source change before reproduction.\n'
+                        '## Test plan\n'
+                        'Tests: run the focused test first and full CTest '
+                        'after an applied fix.\n'
+                        '## Risks\n'
+                        'Risks: changing code before reproduction.\n'
+                        'Uncertainties: the focused test was not executed.\n'
+                        '## Final result\n'
+                        'Regression triage is not yet confirmed.'
+                    )
+                }
+
+        provider = Provider()
+
+        result = run_agent(
+            ROOT,
+            self.ws,
+            'job-regression-triage',
+            provider,
+            issue_id=issue_id,
+            issue=issue,
+            allow_exec=False
+        )
+
+        self.assertEqual(
+            result.status,
+            'COMPLETED'
+        )
+
+        search_event = next(
+            event
+            for event in result.events
+            if event['tool'] == 'search_code'
+        )
+
+        search_result = json.loads(
+            search_event['result']['stdout']
+        )
+
+        found_paths = [
+            match['path']
+            for match in search_result['matches']
+        ]
+
+        for path in expected_paths:
+            self.assertIn(
+                path,
+                found_paths
+            )
+
+        read_event = next(
+            event
+            for event in result.events
+            if (
+                event['tool'] == 'read_file'
+                and event['result']['status'] == 'OK'
+            )
+        )
+
+        self.assertEqual(
+            read_event['arguments']['path'],
+            test_path
+        )
+
+        self.assertIn(
+            'git_diff',
+            [
+                event['tool']
+                for event in result.events
+            ]
+        )
+
+        skill_messages = '\n'.join(
+            message.get('content', '')
+            for message in provider.first_messages
+        )
+
+        self.assertIn(
+            'name: job-regression-triage',
+            skill_messages
+        )
+
+        report_path = (
+            self.ws
+            / 'reports'
+            / report_name
+        )
+
+        save_report(
+            result,
+            report_path,
+            self.ws,
+            'job-regression-triage',
+            issue_id
+        )
+
+        report = report_path.read_text(
+            encoding='utf-8'
+        )
+
+        for expected in (
+            'Symptom:',
+            'Reproduction:',
+            'Evidence:',
+            'Mechanism:',
+            'Proposed fix:',
+            'Tests:',
+            'Risks:',
+            'Uncertainties:'
+        ):
+            self.assertIn(
+                expected,
+                report
+            )
+
+    def test_queue_regression_triage(self):
+        (
+            self.ws
+            / 'tests'
+            / 'thread_safe_queue_test.cpp'
+        ).write_text(
+            'ThreadSafeQueue<int> queue;\n',
+            encoding='utf-8'
+        )
+
+        issue = {
+            'title': 'Queue regression',
+            'symptoms': (
+                'thread_safe_queue_test fails '
+                'during queue handling'
+            ),
+            'expected': (
+                'ThreadSafeQueue preserves '
+                'its queue contract'
+            ),
+            'suspected_tests': [
+                'thread_safe_queue_test'
+            ]
+        }
+
+        self.run_incident(
+            'SK201-QUEUE',
+            issue,
+            'ThreadSafeQueue',
+            [
+                'include/job_system/thread_safe_queue.h',
+                'tests/thread_safe_queue_test.cpp'
+            ],
+            'sk201-queue.md'
+        )
+
+    def test_statistics_regression_triage(self):
+        (
+            self.ws
+            / 'tests'
+            / 'statistics_test.cpp'
+        ).write_text(
+            'int expected_cancelled_ = 1;\n',
+            encoding='utf-8'
+        )
+
+        issue = {
+            'title': 'Statistics regression',
+            'symptoms': (
+                'statistics_test reports an '
+                'incorrect cancelled counter'
+            ),
+            'expected': (
+                'Final job counters have '
+                'the expected values'
+            ),
+            'suspected_tests': [
+                'statistics_test'
+            ]
+        }
+
+        self.run_incident(
+            'SK201-STATS',
+            issue,
+            'cancelled_',
+            [
+                'src/statistics.cpp',
+                'tests/statistics_test.cpp'
+            ],
+            'sk201-statistics.md'
+        )
+
+    def test_skill_does_not_grant_execution_permission(self):
+        class Provider:
+            def chat(self, messages, tools):
+                return {
+                    'content': '',
+                    'tool_calls': [{
+                        'function': {
+                            'name': 'run_selected_tests',
+                            'arguments': {
+                                'tests': [
+                                    'thread_safe_queue_test'
+                                ]
+                            }
+                        }
+                    }]
+                }
+
+        issue = {
+            'title': 'Queue regression',
+            'symptoms': 'thread_safe_queue_test fails',
+            'expected': 'test passes',
+            'suspected_tests': [
+                'thread_safe_queue_test'
+            ]
+        }
+
+        result = run_agent(
+            ROOT,
+            self.ws,
+            'job-regression-triage',
+            Provider(),
+            issue_id='SK201-DENIED',
+            issue=issue,
+            allow_exec=False
+        )
+
+        self.assertEqual(
+            result.status,
+            'BLOCKED'
+        )
+
+        self.assertEqual(
+            result.events[0]['result']['status'],
+            'DENIED'
+        )
+
+    def test_invalid_skill_read_does_not_abort(self):
+        class Provider:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, messages, tools):
+                self.calls += 1
+
+                calls = {
+                    1: (
+                        'read_file',
+                        {
+                            'path': (
+                                'skills/job-regression-triage/'
+                                'SKILL.md'
+                            )
+                        }
+                    ),
+                    2: (
+                        'git_status',
+                        {}
+                    ),
+                    3: (
+                        'read_file',
+                        {
+                            'path': (
+                                'tests/'
+                                'thread_safe_queue_test.cpp'
+                            )
+                        }
+                    ),
+                    4: (
+                        'search_code',
+                        {
+                            'query': 'ThreadSafeQueue'
+                        }
+                    ),
+                    5: (
+                        'git_diff',
+                        {}
+                    )
+                }
+
+                if self.calls in calls:
+                    name, arguments = calls[self.calls]
+
+                    return {
+                        'content': '',
+                        'tool_calls': [{
+                            'function': {
+                                'name': name,
+                                'arguments': arguments
+                            }
+                        }]
+                    }
+
+                return {
+                    'content': (
+                        '## Facts\n'
+                        'Test source inspected EVID-003\n'
+                        '## Hypotheses\n'
+                        'No confirmed mechanism.\n'
+                        '## Minimal fix\n'
+                        'No source change proposed.\n'
+                        '## Test plan\n'
+                        'Run the focused test.\n'
+                        '## Risks\n'
+                        'Failure remains unconfirmed.\n'
+                        '## Final result\n'
+                        'Analysis completed.'
+                    )
+                }
+
+        issue = {
+            'title': 'Queue regression',
+            'symptoms': 'thread_safe_queue_test fails',
+            'expected': 'queue works',
+            'suspected_tests': [
+                'thread_safe_queue_test'
+            ]
+        }
+
+        result = run_agent(
+            ROOT,
+            self.ws,
+            'job-regression-triage',
+            Provider(),
+            issue_id='SK201-READ-RETRY',
+            issue=issue,
+            allow_exec=False
+        )
+
+        self.assertEqual(
+            result.events[0]['result']['status'],
+            'INVALID_ARGUMENTS'
+        )
+
+        self.assertEqual(
+            result.status,
+            'COMPLETED'
+        )
 
 class AgentTest(BaseCase):
     def test_mock_runs_and_reports(self):

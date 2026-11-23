@@ -49,6 +49,22 @@ def load_skill_references(
             'Skill outside skills directory'
         )
 
+    references_dir = (
+        skill_dir
+        / 'references'
+    )
+
+    if not references_dir.exists():
+        return ''
+
+    if (
+        references_dir.is_symlink()
+        or not references_dir.is_dir()
+    ):
+        raise ValueError(
+            'Invalid Skill references directory'
+        )
+
     parts = []
 
     for relative in SKILL_REFERENCE_FILES:

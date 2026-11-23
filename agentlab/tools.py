@@ -16,12 +16,13 @@ TOOLS = [
     ),
     (
         'read_file',
-        'Read one allowlisted project file by relative path.',
+        'Read one allowlisted project file by repository-relative path.',
         {
             'path': {
                 'type': 'string',
                 'description': (
-                    'E.g. include/job_system/thread_safe_queue.h'
+                    'Path under src/, include/, tests/ or app/, '
+                    'e.g. include/job_system/thread_safe_queue.h'
                 )
             }
         }

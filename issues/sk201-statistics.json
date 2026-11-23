@@ -1,0 +1,8 @@
+{
+  "title": "Statistics regression",
+  "symptoms": "statistics_test reports incorrect final job counters",
+  "expected": "Final job states should be counted consistently with the test expectations",
+  "suspected_tests": [
+    "statistics_test"
+  ]
+}

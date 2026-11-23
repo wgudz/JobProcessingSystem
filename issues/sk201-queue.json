@@ -1,0 +1,8 @@
+{
+  "title": "ThreadSafeQueue regression",
+  "symptoms": "thread_safe_queue_test fails during queue shutdown behaviour",
+  "expected": "The queue should preserve its expected shutdown and pop behaviour",
+  "suspected_tests": [
+    "thread_safe_queue_test"
+  ]
+}

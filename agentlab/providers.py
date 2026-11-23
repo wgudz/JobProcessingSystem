@@ -141,6 +141,18 @@ class OllamaProvider:
                         'Ollama returned invalid tool_calls'
                     )
 
+        content = message.get('content') or ''
+
+        if '</think>' in content:
+            content = (
+                content
+                .rsplit('</think>', 1)[1]
+                .lstrip()
+            )
+
+        message = dict(message)
+        message['content'] = content
+
         return message
 
 
