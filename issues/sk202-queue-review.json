@@ -1,0 +1,8 @@
+{
+  "title": "Concurrency review: ThreadSafeQueue close wake-up",
+  "symptoms": "Review a change in ThreadSafeQueue shutdown behaviour for possible multithreaded correctness violations",
+  "expected": "Closing the queue must preserve the existing wake-up and shutdown contract for waiting workers",
+  "suspected_tests": [
+    "thread_safe_queue_test"
+  ]
+}

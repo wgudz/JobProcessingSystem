@@ -57,6 +57,26 @@ FINAL_HEADINGS = (
     '## Final result'
 )
 
+PLAN_ENFORCED_SKILLS = {
+    'job-regression-triage',
+    'job-concurrency-review'
+}
+
+CONCURRENCY_RISK_LABELS = (
+    'Pewne naruszenie kontraktu:',
+    'Możliwy race condition:',
+    'Brak wystarczających dowodów:'
+)
+
+CONCURRENCY_SOURCE_HINTS = {
+    'thread_safe_queue': 'include/job_system/thread_safe_queue.h',
+    'statistics': 'src/statistics.cpp',
+    'worker': 'src/worker.cpp',
+    'worker_pool': 'src/worker_pool.cpp',
+    'job': 'src/job.cpp',
+    'job_manager': 'src/job_manager.cpp'
+}
+
 VERIFICATION_NOT_RUN = 'NOT_RUN'
 VERIFICATION_PASSED = 'PASSED'
 VERIFICATION_FAILED = 'FAILED'
@@ -291,6 +311,15 @@ def create_analysis_plan(
         'Continue with available evidence and report missing Git context.'
     )
 
+    if skill_name == 'job-concurrency-review':
+        add_step(
+            'git_diff',
+            {},
+            'Inspect the current change before making concurrency claims.',
+            'The exact changed lines and files are known.',
+            'Do not report a concurrency defect without the change diff.'
+        )
+
     for test in selected_tests:
         if allow_exec:
             status = 'PENDING'
@@ -339,6 +368,20 @@ def create_analysis_plan(
                 'Expected behaviour is known from the test source.',
                 'Report that the test source could not be inspected.'
             )
+
+    if skill_name == 'job-concurrency-review':
+        for fragment in matched_fragments:
+            source_path = CONCURRENCY_SOURCE_HINTS.get(fragment)
+
+            if source_path:
+                add_step(
+                    'read_file',
+                    {'path': source_path},
+                    'Read concurrency-relevant context for the changed module.',
+                    'The changed module can be checked against its existing invariants.',
+                    'Use git_diff and search_code only; lower confidence if context is missing.'
+                )
+                break
 
     add_step(
         'search_code',
@@ -758,6 +801,176 @@ def build_not_reproduced_report(
 
     return '\n\n'.join(sections)
 
+def has_required_concurrency_risk(
+    text: str
+) -> bool:
+
+    return sum(
+        label in text
+        for label in CONCURRENCY_RISK_LABELS
+    ) == 1
+
+
+def git_diff_paths(
+    evidence: list[dict]
+) -> list[str]:
+
+    paths = []
+
+    for event in evidence:
+        if event['tool'] != 'git_diff':
+            continue
+
+        stdout = str(
+            event['result'].get('stdout', '')
+            or ''
+        )
+
+        diff_texts = []
+
+        try:
+            data = json.loads(stdout)
+
+            if isinstance(data, dict):
+                for key in ('unstaged', 'staged'):
+                    value = data.get(key, '')
+
+                    if isinstance(value, str):
+                        diff_texts.append(value)
+            else:
+                diff_texts.append(stdout)
+
+        except json.JSONDecodeError:
+            diff_texts.append(stdout)
+
+        for diff_text in diff_texts:
+            for match in re.finditer(
+                r'^diff --git a/(.+?) b/(.+?)$',
+                diff_text,
+                flags=re.MULTILINE
+            ):
+                path = match.group(2).strip()
+
+                if path and path not in paths:
+                    paths.append(path)
+
+    return paths
+
+
+def is_documentation_path(
+    path: str
+) -> bool:
+
+    normalized = path.replace('\\', '/').lower()
+
+    if normalized.startswith('docs/'):
+        return True
+
+    name = normalized.rsplit('/', 1)[-1]
+
+    if name in (
+        'readme',
+        'readme.md',
+        'readme.txt',
+        'changelog.md',
+        'contributing.md'
+    ):
+        return True
+
+    return any(
+        normalized.endswith(suffix)
+        for suffix in (
+            '.md',
+            '.rst',
+            '.adoc'
+        )
+    )
+
+
+def build_docs_only_concurrency_report(
+    evidence: list[dict],
+    plan: list[dict]
+) -> str | None:
+
+    if not plan_is_complete(plan):
+        return None
+
+    paths = git_diff_paths(evidence)
+
+    if not paths or not all(
+        is_documentation_path(path)
+        for path in paths
+    ):
+        return None
+
+    git_status_id = next(
+        (
+            event['id']
+            for event in evidence
+            if event['tool'] == 'git_status'
+        ),
+        None
+    )
+
+    git_diff_id = next(
+        (
+            event['id']
+            for event in evidence
+            if event['tool'] == 'git_diff'
+        ),
+        None
+    )
+
+    facts = []
+
+    if git_status_id:
+        facts.append(
+            '- Stan repozytorium i HEAD sprawdzono '
+            + '(' + git_status_id + ').'
+        )
+
+    if git_diff_id:
+        facts.append(
+            '- `git_diff` obejmuje wyłącznie pliki dokumentacyjne: '
+            + ', '.join(
+                '`' + path + '`'
+                for path in paths
+            )
+            + ' (' + git_diff_id + ').'
+        )
+
+    return '\n\n'.join([
+        '## Facts',
+        '\n'.join(facts),
+        '## Hypotheses',
+        (
+            'Zmiana nie modyfikuje kodu wykonywalnego ani testów. '
+            'Na podstawie tego diffu nie ma podstaw do konstruowania '
+            'scenariusza deadlocka, race condition ani naruszenia '
+            'przejść stanu.'
+        ),
+        '## Minimal fix',
+        'Brak poprawki kodu źródłowego do zaproponowania.',
+        '## Test plan',
+        (
+            'Dla tej zmiany dokumentacyjnej test współbieżności nie jest '
+            'wymagany. Jeśli diff zacznie obejmować kod C++ lub testy, '
+            'review należy wykonać ponownie dla rzeczywiście zmienionych '
+            'ścieżek.'
+        ),
+        '## Risks',
+        (
+            'Brak wystarczających dowodów: diff nie zmienia kodu '
+            'wykonywalnego, więc nie ma dowodu na nowe naruszenie '
+            'poprawności wielowątkowej w zakresie tej zmiany.'
+        ),
+        '## Final result',
+        (
+            'Zmiana jest czysto dokumentacyjna. Nie zgłoszono '
+            'problemu współbieżności, ponieważ aktualny diff nie '
+            'modyfikuje zachowania programu.'
+        )
+    ])
 
 def run_agent(
     project_root: Path,
@@ -826,6 +1039,29 @@ def run_agent(
     else:
         issue_text = 'No specific issue was provided.'
 
+    if skill_name == 'job-concurrency-review':
+        task_intro = (
+            'Review the following JobProcessingSystem C++20 change for '
+            'concurrency correctness.\n\n'
+        )
+
+        task_goal = (
+            '\nReview the current working-tree diff. Report only findings '
+            'that are connected to changed lines and repository evidence. '
+            'Do not apply a patch.\n'
+        )
+
+    else:
+        task_intro = (
+            'Investigate the following JobProcessingSystem '
+            'C++20 incident.\n\n'
+        )
+
+        task_goal = (
+            '\nCollect evidence and propose a minimal '
+            'patch without applying it.\n'
+        )
+
     messages = [
         {
             'role': 'system',
@@ -848,12 +1084,10 @@ def run_agent(
         {
             'role': 'user',
             'content': (
-                'Investigate the following JobProcessingSystem '
-                'C++20 incident.\n\n'
+                task_intro
                 + issue_text
-                + '\nCollect evidence and propose a minimal '
-                'patch without applying it.\n'
-                'Use this filename-fragment to CTest mapping '
+                + task_goal
+                + 'Use this filename-fragment to CTest mapping '
                 'when selecting diagnostic tests:\n'
                 + json.dumps(
                     test_map,
@@ -926,7 +1160,7 @@ def run_agent(
         steps += 1
 
         try:
-            if skill_name == 'job-regression-triage':
+            if skill_name in PLAN_ENFORCED_SKILLS:
                 next_step = next_required_step(plan)
 
                 if next_step is None:
@@ -977,7 +1211,7 @@ def run_agent(
         calls = response.get('tool_calls') or []
 
         if (
-            skill_name == 'job-regression-triage'
+            skill_name in PLAN_ENFORCED_SKILLS
             and not calls
             and not plan_is_complete(plan)
         ):
@@ -1013,7 +1247,7 @@ def run_agent(
             )
 
         if (
-            skill_name == 'job-regression-triage'
+            skill_name in PLAN_ENFORCED_SKILLS
             and len(calls) > 1
         ):
             if not nudge(
@@ -1084,7 +1318,7 @@ def run_agent(
 
                 continue
             if (
-                skill_name == 'job-regression-triage'
+                skill_name in PLAN_ENFORCED_SKILLS
                 and not plan_is_complete(plan)
             ):
                 pending = [
@@ -1119,7 +1353,27 @@ def run_agent(
                 continue
 
             if (
-                skill_name == 'job-regression-triage'
+                skill_name == 'job-concurrency-review'
+                and plan_is_complete(plan)
+            ):
+                docs_report = build_docs_only_concurrency_report(
+                    evidence,
+                    plan
+                )
+
+                if docs_report is not None:
+                    return finish(
+                        docs_report,
+                        evidence,
+                        provider,
+                        COMPLETED,
+                        'final_answer',
+                        steps,
+                        tool_calls
+                    )
+                
+            if (
+                skill_name in PLAN_ENFORCED_SKILLS
                 and plan_is_complete(plan)
                 and not has_required_triage_headings(content)
             ):
@@ -1137,6 +1391,32 @@ def run_agent(
                         provider,
                         BLOCKED,
                         'invalid_final_format',
+                        steps,
+                        tool_calls,
+                        rejected_final=content
+                    )
+
+                continue
+
+            if (
+                skill_name == 'job-concurrency-review'
+                and plan_is_complete(plan)
+                and not has_required_concurrency_risk(content)
+            ):
+                if not nudge(
+                    'invalid_concurrency_risk',
+                    'In the ## Risks section use exactly one of these '
+                    'risk phrases verbatim: '
+                    + ', '.join(CONCURRENCY_RISK_LABELS)
+                    + ' Do not combine categories.'
+                ):
+                    return finish(
+                        'Final concurrency review rejected: risk '
+                        'classification is missing or ambiguous.',
+                        evidence,
+                        provider,
+                        BLOCKED,
+                        'invalid_concurrency_risk',
                         steps,
                         tool_calls,
                         rejected_final=content
@@ -1355,19 +1635,55 @@ def run_agent(
                     + str(event['result']['exit_code'])
                 )
 
-            messages.append({
-                'role': 'system',
-                'content': (
+            if skill_name == 'job-concurrency-review':
+                final_rules = (
+                    'The planned evidence is sufficient. '
+                    'Do not request more tools. Produce the final review now.\n\n'
+                    'Evidence index:\n'
+                    + '\n'.join(evidence_index)
+                    + '\n\nConcurrency review rules:\n'
+                    '- The current git_diff defines the review scope. Use surrounding '
+                    'source only to explain how a changed line interacts with existing '
+                    'code. Do not report unrelated pre-existing issues.\n'
+                    '- A documentation-only diff cannot by itself prove a deadlock, '
+                    'race condition, lost wake-up or invalid Job state transition.\n'
+                    '- For shared data, state who writes, who reads, which lock or '
+                    'atomic protects it, and whether multiple locks create an ordering '
+                    'requirement.\n'
+                    '- Terminal Job states must not be overwritten. Check especially '
+                    'Cancelled/TimedOut versus later execution or Completed.\n'
+                    '- Check waitAndPop/close/worker stop wake-up paths, cancellation, '
+                    'timeout and Statistics record* calls only when the diff can affect '
+                    'those contracts.\n'
+                    '- For time-based tests, distinguish scheduler-dependent sleep from '
+                    'an explicit synchronization handshake. Do not call a sleep-only '
+                    'test deterministic merely because it passed.\n'
+                    '- Use exactly one risk phrase in ## Risks: '
+                    + ', '.join(CONCURRENCY_RISK_LABELS)
+                    + '.\n'
+                    '- Use `Pewne naruszenie kontraktu:` only when repository evidence '
+                    'demonstrates a violated invariant for the changed code. Use '
+                    '`Możliwy race condition:` when an unsafe interleaving is plausible '
+                    'but not proven. Use `Brak wystarczających dowodów:` when evidence '
+                    'does not support a concurrency defect.\n'
+                    '- Never invent function names. Name only symbols present in tool '
+                    'evidence.\n'
+                    '- Use the required English section headings verbatim, but write '
+                    'the section contents in Polish.'
+                )
+
+            else:
+                final_rules = (
                     'The planned evidence is sufficient. '
                     'Do not request more tools. '
                     'Produce the final answer now.\n\n'
                     'Evidence index:\n'
                     + '\n'.join(evidence_index)
                     + '\n\nStrict evidence rules:\n'
-                    '- Reproduction and test execution results must cite '
-                    'the EVID-* produced by run_selected_tests, not read_file.\n'
-                    '- read_file evidence supports only statements about '
-                    'the contents of that file.\n'
+                    '- Reproduction and test execution results must cite the '
+                    'EVID-* produced by run_selected_tests, not read_file.\n'
+                    '- read_file evidence supports only statements about the '
+                    'contents of that file.\n'
                     '- search_code evidence supports only locations/snippets '
                     'actually returned by that search.\n'
                     '- git_diff supports only statements about the current '
@@ -1387,6 +1703,10 @@ def run_agent(
                     '- Use the required English section headings verbatim, but write '
                     'the section contents in Polish.'
                 )
+
+            messages.append({
+                'role': 'system',
+                'content': final_rules
             })
 
     return finish(

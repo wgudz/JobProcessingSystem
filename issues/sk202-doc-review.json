@@ -1,0 +1,6 @@
+{
+  "title": "Concurrency review: documentation-only change",
+  "symptoms": "Review a documentation-only change and determine whether it introduces any concurrency correctness risk",
+  "expected": "A documentation-only diff must not be reported as a deadlock, race condition or contract violation without executable-code evidence",
+  "suspected_tests": []
+}
